@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FlatQuestion } from '../types'
-import { isCorrect } from '../lib/exam'
+import { isCorrect, shuffle } from '../lib/exam'
 
 interface QuestionCardProps {
   question: FlatQuestion
@@ -32,6 +32,21 @@ const TYPE_LABEL: Record<string, string> = {
   case_study: 'Case study (check context above)',
 }
 
+// The answer an ordering question starts from: what the list shows is what gets checked,
+// and it is never already solved.
+function scrambledOrder(question: FlatQuestion): string {
+  const order = shuffle(question.options ?? [])
+  const joined = order.join(' -> ')
+  if (order.length > 1 && isCorrect(question, joined)) return [...order.slice(1), order[0]].join(' -> ')
+  return joined
+}
+
+// Next, Previous and a mock save remount the card (parents key it by question id), which drops
+// keyboard focus on <body>. The outgoing card flags the handoff and the next card to mount clears
+// it, taking focus only if focus really was lost, so a stray flag can never steal focus.
+let focusIncomingCard = false
+const focusLost = () => document.activeElement === document.body
+
 export default function QuestionCard({
   question,
   index,
@@ -46,23 +61,51 @@ export default function QuestionCard({
   flagged,
   canPrev,
 }: QuestionCardProps) {
-  const [answer, setAnswer] = useState<string>(initialAnswer ?? '')
+  // Parents key this card by question id, so state starts fresh for every question.
+  const [answer, setAnswer] = useState<string>(
+    () => initialAnswer ?? (question.type === 'drag_drop_order' ? scrambledOrder(question) : ''),
+  )
+  // Graded in study mode. A mock never reveals: saving records the answer and moves on.
   const [revealed, setRevealed] = useState<boolean>(!!showSolutionInitially)
+  const saved = mode === 'mock' && !!answer && answer === initialAnswer
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const verdictRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    setAnswer(initialAnswer ?? '')
-    setRevealed(!!showSolutionInitially)
-  }, [question.id, initialAnswer, showSolutionInitially])
+    const handoff = focusIncomingCard
+    focusIncomingCard = false
+    if (handoff && focusLost()) headingRef.current?.focus()
+  }, [])
+
+  // "Check answer" unmounts once graded; land focus on the verdict instead of <body>.
+  useEffect(() => {
+    if (revealed && focusLost()) verdictRef.current?.focus()
+  }, [revealed])
+
+  const navigate = (go?: () => void) => {
+    if (!go) return
+    focusIncomingCard = true
+    go()
+  }
+  const isLast = index >= total - 1
 
   const correct = useMemo(
     () => (answer ? isCorrect(question, answer) : false),
     [answer, question],
   )
 
-  const submit = () => {
-    if (!answer) return
-    setRevealed(true)
-    onAnswer?.(question.id, answer, correct)
+  const submit = (given = answer) => {
+    if (!given) return
+    onAnswer?.(question.id, given, isCorrect(question, given))
+    if (mode === 'study') setRevealed(true)
+    else if (!isLast) navigate(onNext)
+  }
+
+  const selfMark = (matched: boolean) => {
+    if (revealed) return
+    const given = matched ? 'self-correct' : 'self-wrong'
+    setAnswer(given)
+    if (mode === 'study') submit(given)
   }
 
   const optionLetter = (i: number) => String.fromCharCode(65 + i)
@@ -75,7 +118,7 @@ export default function QuestionCard({
   }
 
   const toggleLetter = (letter: string) => {
-    if (revealed && mode === 'study') return
+    if (revealed) return
     if (question.type === 'multi_select') {
       const set = new Set(answer.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean))
       if (set.has(letter)) set.delete(letter)
@@ -116,6 +159,7 @@ export default function QuestionCard({
           <button
             onClick={() => onFlag(question.id)}
             className={`btn btn-ghost text-xs ${flagged ? 'text-accent' : ''}`}
+            aria-pressed={!!flagged}
             title="Flag to review later"
           >
             {flagged ? '⚑ Flagged' : '⚐ Flag'}
@@ -123,7 +167,11 @@ export default function QuestionCard({
         )}
       </header>
 
-      <h2 className="text-lg font-display text-ink leading-relaxed whitespace-pre-line mb-4">
+      <h2
+        ref={headingRef}
+        tabIndex={-1}
+        className="text-lg font-display text-ink leading-relaxed whitespace-pre-line mb-4 scroll-mt-28"
+      >
         {question.stem}
       </h2>
 
@@ -152,8 +200,9 @@ export default function QuestionCard({
               <li key={i}>
                 <button
                   onClick={() => toggleLetter(usedLetter)}
-                  className={`w-full text-left border rounded-lg p-3 flex gap-3 transition ${tone}`}
-                  disabled={revealed && mode === 'mock'}
+                  className={`w-full text-left border rounded-lg p-3 flex gap-3 transition enabled:cursor-pointer ${tone}`}
+                  aria-pressed={isPicked}
+                  disabled={revealed}
                 >
                   <div
                     className={`shrink-0 w-7 h-7 rounded-md font-mono font-semibold grid place-items-center text-sm ${
@@ -174,7 +223,6 @@ export default function QuestionCard({
 
       {question.type === 'drag_drop_order' && question.options && (
         <DragDropOrder
-          options={question.options}
           value={answer}
           revealed={revealed}
           correct={question.correct}
@@ -189,7 +237,8 @@ export default function QuestionCard({
             placeholder="Type your answer…"
             value={answer}
             onChange={(e) => setAnswer(e.target.value)}
-            disabled={revealed && mode === 'mock'}
+            disabled={revealed}
+            aria-label="Your answer"
             className="w-full font-mono"
           />
           {revealed && (
@@ -204,36 +253,38 @@ export default function QuestionCard({
       {question.type === 'match_pairs' && question.pairs && (
         <MatchPairs
           pairs={question.pairs}
-          revealed={revealed}
-          onSelfMark={(matched) => {
-            setAnswer(matched ? 'self-correct' : 'self-wrong')
-          }}
+          mode={mode}
+          graded={revealed}
+          answer={answer}
+          onSelfMark={selfMark}
         />
       )}
 
       <footer className="mt-5 flex flex-wrap items-center gap-2">
-        {!revealed && mode === 'study' && (
-          <button onClick={submit} className="btn btn-primary" disabled={!answer}>
+        {/* Match pairs are graded by the self-mark itself, not by a separate check. */}
+        {!revealed && mode === 'study' && question.type !== 'match_pairs' && (
+          <button onClick={() => submit()} className="btn btn-primary" disabled={!answer}>
             Check answer
           </button>
         )}
-        {!revealed && mode === 'mock' && (
-          <button onClick={submit} className="btn" disabled={!answer}>
+        {mode === 'mock' && (
+          <button onClick={() => submit()} className="btn" disabled={!answer}>
             Save and continue
           </button>
         )}
+        {saved && <div className="chip chip-good">✓ Saved</div>}
         {revealed && mode === 'study' && (
-          <div className={`chip ${correct ? 'chip-good' : 'chip-bad'}`}>
+          <div ref={verdictRef} tabIndex={-1} className={`chip ${correct ? 'chip-good' : 'chip-bad'}`}>
             {correct ? '✓ Correct' : '✕ Incorrect'}
           </div>
         )}
         {canPrev && onPrev && (
-          <button onClick={onPrev} className="btn btn-ghost">
+          <button onClick={() => navigate(onPrev)} className="btn btn-ghost">
             ◂ Previous
           </button>
         )}
         {onNext && (
-          <button onClick={onNext} className="btn btn-ghost">
+          <button onClick={() => navigate(onNext)} className="btn btn-ghost" disabled={isLast}>
             Next ▸
           </button>
         )}
@@ -254,24 +305,17 @@ export default function QuestionCard({
 }
 
 function DragDropOrder({
-  options,
   value,
   revealed,
   correct,
   onChange,
 }: {
-  options: string[]
   value: string
   revealed: boolean
   correct?: string
   onChange: (v: string) => void
 }) {
-  const order = useMemo<string[]>(() => {
-    if (value) {
-      return value.split(' -> ').map((s) => s.trim())
-    }
-    return [...options]
-  }, [value, options])
+  const order = value.split(' -> ').map((s) => s.trim())
 
   const move = (idx: number, dir: -1 | 1) => {
     const newOrder = [...order]
@@ -289,8 +333,9 @@ function DragDropOrder({
         const correctHere = revealed && correctOrder[i] === opt
         const wrongHere = revealed && !correctHere
         return (
+          // Keyed by content, not position, so a moved step keeps its DOM node and keyboard focus.
           <li
-            key={`${opt}-${i}`}
+            key={opt}
             className={`flex items-center gap-3 border rounded-lg p-3 ${
               revealed
                 ? correctHere
@@ -307,10 +352,20 @@ function DragDropOrder({
             <div className="flex-1 text-sm text-ink-dim">{opt}</div>
             {!revealed && (
               <div className="flex gap-1">
-                <button onClick={() => move(i, -1)} className="btn btn-ghost text-xs px-2">
+                <button
+                  onClick={() => move(i, -1)}
+                  className="btn btn-ghost text-xs px-2"
+                  aria-label={`Move "${opt}" up`}
+                  aria-disabled={i === 0}
+                >
                   ▴
                 </button>
-                <button onClick={() => move(i, 1)} className="btn btn-ghost text-xs px-2">
+                <button
+                  onClick={() => move(i, 1)}
+                  className="btn btn-ghost text-xs px-2"
+                  aria-label={`Move "${opt}" down`}
+                  aria-disabled={i === order.length - 1}
+                >
                   ▾
                 </button>
               </div>
@@ -328,29 +383,42 @@ function DragDropOrder({
   )
 }
 
+// Self-graded: think of each match, reveal (study mode only), then say whether you had them all.
+// A mock never reveals, so there the self-mark is a blind, changeable selection saved like any answer.
 function MatchPairs({
   pairs,
-  revealed,
+  mode,
+  graded,
+  answer,
   onSelfMark,
 }: {
   pairs: { left: string; right: string }[]
-  revealed: boolean
+  mode: 'study' | 'mock'
+  graded: boolean
+  answer: string
   onSelfMark: (matched: boolean) => void
 }) {
+  const [shown, setShown] = useState(false)
+  const answersVisible = mode === 'study' && (shown || graded)
+  const canMark = mode === 'mock' || answersVisible
+  const hint =
+    mode === 'mock'
+      ? 'Match each left-hand side in your head. Answers stay hidden during the mock.'
+      : answersVisible
+      ? 'Compare with what you had in mind, then grade yourself.'
+      : 'Match each left-hand side in your head, then reveal the answers.'
+
   return (
     <div>
-      {!revealed && (
-        <p className="text-xs text-ink-mute mb-3">
-          Match-pairs item. Read each left-hand side and think the answer before revealing.
-        </p>
-      )}
+      <p className="text-xs text-ink-mute mb-3">{hint}</p>
       <div className="grid lg:grid-cols-2 gap-2">
-        {pairs.map((p, i) => (
-          <div key={i} className="border border-line rounded-lg p-3 text-sm">
+        {pairs.map((p) => (
+          <div key={p.left} className="border border-line rounded-lg p-3 text-sm">
             <div className="text-ink font-medium">{p.left}</div>
             <div
+              aria-hidden={!answersVisible}
               className={`mt-1 text-ink-dim leading-snug ${
-                revealed ? '' : 'blur-sm select-none'
+                answersVisible ? '' : 'blur-sm select-none'
               }`}
             >
               ➜ {p.right}
@@ -358,16 +426,56 @@ function MatchPairs({
           </div>
         ))}
       </div>
-      {!revealed && (
-        <div className="mt-3 flex gap-2">
-          <button onClick={() => onSelfMark(true)} className="btn btn-primary text-xs">
+      {canMark ? (
+        <div role="group" aria-label="Did you get every pair?" className="mt-3 flex flex-wrap gap-2">
+          {/* After a click on "Reveal answers" (which unmounts), keep keyboard focus in the card. */}
+          <SelfMarkButton
+            pressed={answer === 'self-correct'}
+            locked={graded}
+            autoFocus={shown}
+            onClick={() => onSelfMark(true)}
+          >
             I got it
-          </button>
-          <button onClick={() => onSelfMark(false)} className="btn btn-danger text-xs">
+          </SelfMarkButton>
+          <SelfMarkButton pressed={answer === 'self-wrong'} locked={graded} onClick={() => onSelfMark(false)}>
             I missed
-          </button>
+          </SelfMarkButton>
         </div>
+      ) : (
+        <button onClick={() => setShown(true)} className="btn btn-primary mt-3">
+          Reveal answers
+        </button>
       )}
     </div>
+  )
+}
+
+function SelfMarkButton({
+  pressed,
+  locked,
+  autoFocus,
+  onClick,
+  children,
+}: {
+  pressed: boolean
+  locked: boolean
+  autoFocus?: boolean
+  onClick: () => void
+  children: string
+}) {
+  return (
+    // aria-disabled, not disabled: grading locks the button while it has focus, and a disabled
+    // button would drop that focus.
+    <button onClick={onClick} className="btn" aria-pressed={pressed} aria-disabled={locked} autoFocus={autoFocus}>
+      <span
+        aria-hidden
+        className={`grid place-items-center w-4 h-4 rounded-full border text-[10px] font-bold ${
+          pressed ? 'bg-accent border-accent text-bg' : 'border-line-strong'
+        }`}
+      >
+        {pressed && '✓'}
+      </span>
+      {children}
+    </button>
   )
 }

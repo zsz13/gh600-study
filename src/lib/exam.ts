@@ -14,14 +14,18 @@ export function flattenQuestions(domains: Domain[] = DOMAINS): FlatQuestion[] {
     for (const obj of dom.objectives) {
       for (const q of obj.questions ?? []) {
         counter += 1
-        flat.push({
-          ...q,
-          id: `d${dom.domain_id}-${obj.id}-${counter}`,
-          domainId: dom.domain_id,
-          domainTitle: dom.title,
-          objectiveId: obj.id,
-          objectiveTitle: obj.title,
-        })
+        // A case study has no controls of its own: its context is folded into each
+        // sub-question below. It still takes a counter slot so persisted ids stay stable.
+        if (q.type !== 'case_study') {
+          flat.push({
+            ...q,
+            id: `d${dom.domain_id}-${obj.id}-${counter}`,
+            domainId: dom.domain_id,
+            domainTitle: dom.title,
+            objectiveId: obj.id,
+            objectiveTitle: obj.title,
+          })
+        }
         if (q.type === 'case_study' && q.sub_questions) {
           q.sub_questions.forEach((sq, idx) => {
             counter += 1

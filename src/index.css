@@ -113,9 +113,8 @@
   .btn-ghost { background: transparent; }
   .btn-danger { background: rgba(248,81,73,0.15); border-color: rgba(248,81,73,0.45); color: #ff8b85; }
   .btn-danger:hover:enabled { background: rgba(248,81,73,0.25); }
-  /* Toggle buttons: the chosen one stays legible even once the choice is locked. */
+  /* Toggle buttons: the chosen one is highlighted. */
   .btn[aria-pressed="true"] { background: rgba(255,181,71,0.12); border-color: var(--color-accent); }
-  .btn[aria-pressed="true"][aria-disabled="true"] { opacity: 1; cursor: default; }
 
   .chip {
     display: inline-flex;

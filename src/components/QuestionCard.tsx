@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type { FlatQuestion } from '../types'
-import { isCorrect, shuffle } from '../lib/exam'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
+import type { FlatQuestion, MatchPair } from '../types'
+import { isCorrect, matchSelections, shuffle } from '../lib/exam'
 
 interface QuestionCardProps {
   question: FlatQuestion
@@ -65,9 +66,14 @@ export default function QuestionCard({
   const [answer, setAnswer] = useState<string>(
     () => initialAnswer ?? (question.type === 'drag_drop_order' ? scrambledOrder(question) : ''),
   )
+  // A match is answered once every item has a pick (so an old "self-correct" self-grade reads as
+  // unanswered); the other types once there is any answer.
+  const pairCount = question.pairs?.length ?? 0
+  const picks = question.type === 'match_pairs' ? matchSelections(answer, pairCount) : []
+  const answered = question.type === 'match_pairs' ? pairCount > 0 && !picks.includes(undefined) : !!answer
   // Graded in study mode. A mock never reveals: saving records the answer and moves on.
   const [revealed, setRevealed] = useState<boolean>(!!showSolutionInitially)
-  const saved = mode === 'mock' && !!answer && answer === initialAnswer
+  const saved = mode === 'mock' && answered && answer === initialAnswer
   const headingRef = useRef<HTMLHeadingElement>(null)
   const verdictRef = useRef<HTMLDivElement>(null)
 
@@ -94,18 +100,17 @@ export default function QuestionCard({
     [answer, question],
   )
 
-  const submit = (given = answer) => {
-    if (!given) return
-    onAnswer?.(question.id, given, isCorrect(question, given))
+  const submit = () => {
+    if (!answered) return
+    onAnswer?.(question.id, answer, isCorrect(question, answer))
     if (mode === 'study') setRevealed(true)
     else if (!isLast) navigate(onNext)
   }
 
-  const selfMark = (matched: boolean) => {
-    if (revealed) return
-    const given = matched ? 'self-correct' : 'self-wrong'
-    setAnswer(given)
-    if (mode === 'study') submit(given)
+  let verdict = correct ? '✓ Correct' : '✕ Incorrect'
+  if (question.type === 'match_pairs') {
+    const hits = picks.filter((pick, item) => pick === item).length
+    verdict += ` · ${hits} of ${pairCount} pairs`
   }
 
   const optionLetter = (i: number) => String.fromCharCode(65 + i)
@@ -252,30 +257,34 @@ export default function QuestionCard({
 
       {question.type === 'match_pairs' && question.pairs && (
         <MatchPairs
+          questionId={question.id}
           pairs={question.pairs}
-          mode={mode}
+          value={answer}
           graded={revealed}
-          answer={answer}
-          onSelfMark={selfMark}
+          onChange={setAnswer}
         />
       )}
 
       <footer className="mt-5 flex flex-wrap items-center gap-2">
-        {/* Match pairs are graded by the self-mark itself, not by a separate check. */}
-        {!revealed && mode === 'study' && question.type !== 'match_pairs' && (
-          <button onClick={() => submit()} className="btn btn-primary" disabled={!answer}>
+        {!revealed && mode === 'study' && (
+          <button onClick={submit} className="btn btn-primary" disabled={!answered}>
             Check answer
           </button>
         )}
         {mode === 'mock' && (
-          <button onClick={() => submit()} className="btn" disabled={!answer}>
+          <button onClick={submit} className="btn" disabled={!answered}>
             Save and continue
           </button>
+        )}
+        {question.type === 'match_pairs' && !revealed && (
+          <span className="text-xs text-ink-mute">
+            {picks.filter((pick) => pick !== undefined).length} of {pairCount} matched
+          </span>
         )}
         {saved && <div className="chip chip-good">✓ Saved</div>}
         {revealed && mode === 'study' && (
           <div ref={verdictRef} tabIndex={-1} className={`chip ${correct ? 'chip-good' : 'chip-bad'}`}>
-            {correct ? '✓ Correct' : '✕ Incorrect'}
+            {verdict}
           </div>
         )}
         {canPrev && onPrev && (
@@ -383,99 +392,191 @@ function DragDropOrder({
   )
 }
 
-// Self-graded: think of each match, reveal (study mode only), then say whether you had them all.
-// A mock never reveals, so there the self-mark is a blind, changeable selection saved like any answer.
+// Each question's answer order for this page session: shuffled once, then the same on every visit,
+// and never the key's own order (where item n's match would sit at position n).
+const answerOrders = new Map<string, number[]>()
+function answerOrder(questionId: string, size: number): number[] {
+  let order = answerOrders.get(questionId)
+  if (!order) {
+    order = shuffle(Array.from({ length: size }, (_, choice) => choice))
+    if (size > 1 && order.every((choice, i) => choice === i)) order = [...order.slice(1), order[0]]
+    answerOrders.set(questionId, order)
+  }
+  return order
+}
+
+// Pick an item, then its answer. Items are a native radio group choosing which item the next answer
+// goes to; answers are native buttons. A pair shows one number on both sides and the answer's text on
+// its item, each control's accessible name states its pair, and every change is announced.
 function MatchPairs({
+  questionId,
   pairs,
-  mode,
+  value,
   graded,
-  answer,
-  onSelfMark,
+  onChange,
 }: {
-  pairs: { left: string; right: string }[]
-  mode: 'study' | 'mock'
+  questionId: string
+  pairs: MatchPair[]
+  value: string
   graded: boolean
-  answer: string
-  onSelfMark: (matched: boolean) => void
+  onChange: (value: string) => void
 }) {
-  const [shown, setShown] = useState(false)
-  const answersVisible = mode === 'study' && (shown || graded)
-  const canMark = mode === 'mock' || answersVisible
-  const hint =
-    mode === 'mock'
-      ? 'Match each left-hand side in your head. Answers stay hidden during the mock.'
-      : answersVisible
-      ? 'Compare with what you had in mind, then grade yourself.'
-      : 'Match each left-hand side in your head, then reveal the answers.'
+  const group = useId()
+  const [order] = useState(() => answerOrder(questionId, pairs.length))
+  const picks = matchSelections(value, pairs.length)
+  // The item the next answer goes to: the first unmatched one to start with.
+  const [active, setActive] = useState(() => Math.max(0, picks.indexOf(undefined)))
+  const [announcement, setAnnouncement] = useState('')
+  const itemName = (item: number) => `${item + 1}. ${pairs[item].left}`
+
+  const choose = (choice: number) => {
+    const next = [...picks]
+    const owner = next.indexOf(choice)
+    const previous = picks[active]
+    let target = active
+    let message: string
+    if (owner === active) {
+      next[active] = undefined
+      message = `Removed the match for ${itemName(active)}.`
+    } else {
+      next[active] = choice
+      if (owner === -1) {
+        message = `Matched ${itemName(active)} with ${pairs[choice].right}.`
+        // On to the next unmatched item, wrapping; stay put once every item is matched.
+        const after = next.map((_, k) => (active + 1 + k) % next.length)
+        target = after.find((item) => next[item] === undefined) ?? active
+      } else {
+        // Answers are used once: taking one from another item leaves that item to fill next.
+        next[owner] = undefined
+        message = `Moved ${pairs[choice].right} from item ${owner + 1} to ${itemName(active)}. Item ${owner + 1} is now unmatched.`
+        target = owner
+      }
+      if (previous !== undefined) message += ` ${pairs[previous].right} is free again.`
+      if (target !== active) message += ` Now choosing for ${itemName(target)}.`
+    }
+    setActive(target)
+    setAnnouncement(message)
+    onChange(next.map((pick) => pick ?? '').join(','))
+  }
 
   return (
-    <div>
-      <p className="text-xs text-ink-mute mb-3">{hint}</p>
-      <div className="grid lg:grid-cols-2 gap-2">
-        {pairs.map((p) => (
-          <div key={p.left} className="border border-line rounded-lg p-3 text-sm">
-            <div className="text-ink font-medium">{p.left}</div>
-            <div
-              aria-hidden={!answersVisible}
-              className={`mt-1 text-ink-dim leading-snug ${
-                answersVisible ? '' : 'blur-sm select-none'
-              }`}
-            >
-              ➜ {p.right}
+    <div className="@container">
+      {!graded && (
+        <p className="text-xs text-ink-mute mb-3">Pick an item, then its answer. Each answer is used once.</p>
+      )}
+      {/* Once graded, each item shows its match and the result, so the answer list is dropped. */}
+      <div className={`grid gap-5 ${graded ? '' : '@xl:grid-cols-2 @xl:gap-6'}`}>
+        <fieldset>
+          <legend className="text-xs uppercase tracking-wider text-ink-mute font-semibold mb-2">Items</legend>
+          <div className="space-y-2">
+            {pairs.map((p, item) => {
+              const pick = picks[item]
+              const hit = pick === item
+              const choosing = !graded && active === item
+              const tone = graded
+                ? hit
+                  ? 'border-good/60 bg-good/10'
+                  : 'border-bad/60 bg-bad/10'
+                : choosing
+                ? 'border-accent ring-1 ring-accent bg-accent/5'
+                : pick === undefined
+                ? 'border-dashed border-line-strong hover:border-accent/60'
+                : 'border-line hover:border-line-strong'
+              const state = pick === undefined ? 'not matched yet' : `matched with ${pairs[pick].right}`
+              const result = graded ? (hit ? ', correct' : `, incorrect, should be ${p.right}`) : ''
+              return (
+                <label
+                  key={p.left}
+                  className={`block rounded-lg border p-3 text-sm transition has-[:enabled]:cursor-pointer has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent ${tone}`}
+                >
+                  <input
+                    type="radio"
+                    name={group}
+                    className="sr-only"
+                    checked={active === item}
+                    disabled={graded}
+                    onChange={() => {
+                      setActive(item)
+                      // The radio announces the new target itself; drop the last pairing message.
+                      setAnnouncement('')
+                    }}
+                    aria-label={`${itemName(item)}, ${state}${result}`}
+                  />
+                  <span aria-hidden className="flex gap-3">
+                    <PairBadge filled={pick !== undefined}>{item + 1}</PairBadge>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-ink font-medium leading-snug">{p.left}</span>
+                      <span className={`block mt-1 leading-snug ${pick === undefined ? 'text-ink-mute' : 'text-ink-dim'}`}>
+                        {pick === undefined ? 'Not matched yet' : `→ ${pairs[pick].right}`}
+                      </span>
+                      {graded &&
+                        (hit ? (
+                          <span className="block mt-1 text-xs text-good">✓ Matched correctly</span>
+                        ) : (
+                          <span className="block mt-1 text-xs text-ink-dim">
+                            <span className="text-bad">✕</span> Should be: <span className="text-good">{p.right}</span>
+                          </span>
+                        ))}
+                    </span>
+                    {choosing && <span className="chip chip-accent shrink-0 self-start">▸ Choosing</span>}
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+        </fieldset>
+        {!graded && (
+          <div role="group" aria-label={`Answers, choosing for ${itemName(active)}`}>
+            <div aria-hidden className="text-xs uppercase tracking-wider text-ink-mute font-semibold mb-2">
+              Answers · choosing for {active + 1}
+            </div>
+            {/* Stacked, the items can be off screen: name the target right above the answers. */}
+            <p aria-hidden className="@xl:hidden -mt-1 mb-2 text-sm text-ink leading-snug">
+              {pairs[active].left}
+            </p>
+            <div className="space-y-2">
+              {order.map((choice) => {
+                const owner = picks.indexOf(choice)
+                const selected = owner === active
+                return (
+                  <button
+                    key={choice}
+                    type="button"
+                    aria-pressed={selected}
+                    aria-label={owner === -1 ? pairs[choice].right : `${pairs[choice].right}, matched with item ${owner + 1}`}
+                    // A double-click or a held Enter would otherwise pair the answer, then move it on to the
+                    // next target: act on the first click (detail 0 from the keyboard, 1 from a pointer) only.
+                    onClick={(e) => e.detail < 2 && choose(choice)}
+                    onKeyDown={(e) => e.repeat && e.preventDefault()}
+                    className={`w-full text-left flex gap-3 rounded-lg border p-3 text-sm transition cursor-pointer ${
+                      selected ? 'border-accent bg-accent/10' : 'border-line hover:border-line-strong'
+                    }`}
+                  >
+                    <PairBadge filled={owner !== -1}>{owner === -1 ? '' : owner + 1}</PairBadge>
+                    <span className="text-ink-dim leading-snug">{pairs[choice].right}</span>
+                  </button>
+                )
+              })}
             </div>
           </div>
-        ))}
+        )}
       </div>
-      {canMark ? (
-        <div role="group" aria-label="Did you get every pair?" className="mt-3 flex flex-wrap gap-2">
-          {/* After a click on "Reveal answers" (which unmounts), keep keyboard focus in the card. */}
-          <SelfMarkButton
-            pressed={answer === 'self-correct'}
-            locked={graded}
-            autoFocus={shown}
-            onClick={() => onSelfMark(true)}
-          >
-            I got it
-          </SelfMarkButton>
-          <SelfMarkButton pressed={answer === 'self-wrong'} locked={graded} onClick={() => onSelfMark(false)}>
-            I missed
-          </SelfMarkButton>
-        </div>
-      ) : (
-        <button onClick={() => setShown(true)} className="btn btn-primary mt-3">
-          Reveal answers
-        </button>
-      )}
+      <p role="status" className="sr-only">
+        {announcement}
+      </p>
     </div>
   )
 }
 
-function SelfMarkButton({
-  pressed,
-  locked,
-  autoFocus,
-  onClick,
-  children,
-}: {
-  pressed: boolean
-  locked: boolean
-  autoFocus?: boolean
-  onClick: () => void
-  children: string
-}) {
+// The number both halves of a pair share; an empty dashed ring while unmatched.
+function PairBadge({ filled, children }: { filled: boolean; children: ReactNode }) {
   return (
-    // aria-disabled, not disabled: grading locks the button while it has focus, and a disabled
-    // button would drop that focus.
-    <button onClick={onClick} className="btn" aria-pressed={pressed} aria-disabled={locked} autoFocus={autoFocus}>
-      <span
-        aria-hidden
-        className={`grid place-items-center w-4 h-4 rounded-full border text-[10px] font-bold ${
-          pressed ? 'bg-accent border-accent text-bg' : 'border-line-strong'
-        }`}
-      >
-        {pressed && '✓'}
-      </span>
+    <span
+      className={`grid place-items-center shrink-0 w-6 h-6 rounded-full text-xs font-mono font-semibold ${
+        filled ? 'bg-accent text-bg' : 'border border-dashed border-line-strong text-ink-mute'
+      }`}
+    >
       {children}
-    </button>
+    </span>
   )
 }

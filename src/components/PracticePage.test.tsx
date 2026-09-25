@@ -20,12 +20,9 @@ const stem = () => within(card()).getByRole('heading').textContent
 // Answers whatever question type is on screen, the way a user would.
 async function answerCurrent(user: UserEvent) {
   const c = within(card())
-  const reveal = c.queryByRole('button', { name: 'Reveal answers' })
-  if (reveal) {
-    await user.click(reveal)
-    await user.click(c.getByRole('button', { name: 'I got it' }))
-    return
-  }
+  // Match pairs: each answer goes to the current item, and the target moves to the next unmatched one.
+  const answers = c.queryByRole('group', { name: /^Answers/ })
+  if (answers) for (const a of within(answers).getAllByRole('button')) await user.click(a)
   const input = c.queryByRole('textbox')
   if (input) await user.type(input, 'x')
   const options = c.queryAllByRole('button', { pressed: false }).filter((b) => b.closest('ul'))
@@ -62,6 +59,27 @@ describe('practice session', () => {
     within(card()).getByRole('button', { name: 'Next ▸' }).focus()
     await user.keyboard('{Enter}')
     expect(document.activeElement).toBe(within(card()).getByRole('heading'))
+  })
+
+  it('starts a match-pairs question fresh when you come back to it, with the answers in the same order', async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    const next = () => user.click(within(card()).getByRole('button', { name: 'Next ▸' }))
+    const answers = () => within(within(card()).getByRole('group', { name: /^Answers/ })).getAllByRole('button')
+    const order = () => answers().map((a) => a.getAttribute('aria-label')!.split(', matched with')[0])
+    for (let i = 0; i < 5; i++) await next()
+    expect(stem()).toBe('Match each anti-pattern to the GitHub control that mitigates it.')
+    const before = order()
+    await user.click(answers()[0])
+
+    await next()
+    expect(within(card()).queryAllByRole('radio')).toEqual([])
+    await user.click(within(card()).getByRole('button', { name: '◂ Previous' }))
+
+    const items = within(card()).getAllByRole('radio').map((r) => r.getAttribute('aria-label'))
+    expect(items.every((name) => name!.endsWith(', not matched yet'))).toBe(true)
+    expect(order()).toEqual(before)
+    expect((within(card()).getByRole('button', { name: 'Check answer' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('every question in the bank can be answered and graded', async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Domain } from '../types'
-import { ALL_QUESTIONS, flattenQuestions } from './exam'
+import { ALL_QUESTIONS, flattenQuestions, isCorrect, matchSelections } from './exam'
 
 const SEP = ' -> '
 
@@ -28,10 +28,20 @@ describe('question bank', () => {
       case 'fill_blank':
         expect(q.correct?.trim()).toBeTruthy()
         break
-      case 'match_pairs':
-        expect(q.pairs?.length).toBeGreaterThan(1)
-        expect(new Set(q.pairs!.map((p) => p.left)).size).toBe(q.pairs!.length) // left sides are React keys
+      case 'match_pairs': {
+        // `pairs` is the key: each left item sits with its own right-hand value, and every right-hand
+        // value is one choice in each item's picker, so both sides must be distinct and non-empty.
+        const n = q.pairs?.length ?? 0
+        expect(n).toBeGreaterThan(1)
+        const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ')
+        expect(new Set(q.pairs!.map((p) => norm(p.left))).size).toBe(n) // left sides are React keys and labels
+        expect(new Set(q.pairs!.map((p) => norm(p.right))).size).toBe(n)
+        for (const p of q.pairs!) expect(p.left.trim() && p.right.trim()).toBeTruthy()
+        const key = q.pairs!.map((_, i) => i)
+        expect(isCorrect(q, key.join(','))).toBe(true)
+        expect(isCorrect(q, [...key.slice(1), key[0]].join(','))).toBe(false)
         break
+      }
       default:
         // case_study parents carry no controls; their context is folded into each sub-question.
         throw new Error(`unanswerable question type in the bank: ${q.type}`)
@@ -78,5 +88,33 @@ describe('flattenQuestions', () => {
     // Ids are persisted in localStorage progress; the case-study parent still consumes a slot.
     expect(flat.map((q) => q.id)).toEqual(['d1-1.1-1', 'd1-1.1-3-sub0', 'd1-1.1-4-sub1', 'd1-1.1-5'])
     expect(flat[1].stem).toContain('Context')
+  })
+})
+
+describe('match pairs', () => {
+  const q = ALL_QUESTIONS.find((x) => x.id === 'd1-1.1-7')!
+
+  it('are all in the bank, including the one inside a case study', () => {
+    const ids = ALL_QUESTIONS.filter((x) => x.type === 'match_pairs').map((x) => x.id)
+    expect(ids).toContain('d6-6.2-78-sub0')
+    expect(q.type).toBe('match_pairs')
+  })
+
+  it('are graded from the stored mapping, not a self-grade', () => {
+    expect(isCorrect(q, '0,1,2,3')).toBe(true)
+    expect(isCorrect(q, '1,0,2,3')).toBe(false)
+    expect(isCorrect(q, '0,1,2,')).toBe(false)
+    expect(isCorrect(q, 'self-correct')).toBe(false)
+  })
+
+  it('read a stored answer per left item, and anything not a fresh in-range choice as unchosen', () => {
+    expect(matchSelections('2,0,,1', 4)).toEqual([2, 0, undefined, 1])
+    expect(matchSelections('', 3)).toEqual([undefined, undefined, undefined])
+    expect(matchSelections('self-correct', 2)).toEqual([undefined, undefined])
+    expect(matchSelections('1,1,5,-1,x', 5)).toEqual([1, undefined, undefined, undefined, undefined])
+    // Only the exact form the pickers write counts, so "answered" and "graded correct" read alike.
+    expect(matchSelections(' 1,0', 2)).toEqual([undefined, 0])
+    expect(matchSelections('1.0,01', 2)).toEqual([undefined, undefined])
+    expect(matchSelections('0,1,2,3,4', 4)).toEqual([undefined, undefined, undefined, undefined])
   })
 })

@@ -261,14 +261,15 @@ export default function QuestionCard({
         />
       )}
 
+      {/* Buttons are 44px tall on phone-sized screens, for touch. */}
       <footer className="mt-5 flex flex-wrap items-center gap-2">
         {!revealed && mode === 'study' && (
-          <button onClick={submit} className="btn btn-primary" disabled={!answered}>
+          <button onClick={submit} className="btn btn-primary max-sm:min-h-11" disabled={!answered}>
             Check answer
           </button>
         )}
         {mode === 'mock' && (
-          <button onClick={submit} className="btn" disabled={!answered}>
+          <button onClick={submit} className="btn max-sm:min-h-11" disabled={!answered}>
             Save and continue
           </button>
         )}
@@ -283,15 +284,21 @@ export default function QuestionCard({
             {verdict}
           </div>
         )}
-        {canPrev && onPrev && (
-          <button onClick={() => navigate(onPrev)} className="btn btn-ghost">
-            ◂ Previous
-          </button>
-        )}
-        {onNext && (
-          <button onClick={() => navigate(onNext)} className="btn btn-ghost" disabled={isLast}>
-            Next ▸
-          </button>
+        {((canPrev && onPrev) || onNext) && (
+          // One group, so on a narrow card Previous and Next move to a new line together instead of
+          // Next wrapping on its own; the pair splits only if the card is narrower than both.
+          <nav aria-label="Question navigation" className="flex flex-wrap gap-2">
+            {canPrev && onPrev && (
+              <button onClick={() => navigate(onPrev)} className="btn btn-ghost max-sm:min-h-11">
+                ◂ Previous
+              </button>
+            )}
+            {onNext && (
+              <button onClick={() => navigate(onNext)} className="btn btn-ghost max-sm:min-h-11" disabled={isLast}>
+                Next ▸
+              </button>
+            )}
+          </nav>
         )}
       </footer>
 

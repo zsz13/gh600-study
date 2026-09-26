@@ -723,6 +723,14 @@ describe('order the steps', () => {
 })
 
 describe('navigation', () => {
+  // jsdom has no layout, so this pins the structure that keeps the pair together: one group, which
+  // wraps onto a new line as a unit on a narrow card instead of leaving Next alone on a line.
+  it.each(['study', 'mock'] as const)('keeps Previous and Next together in one navigation group (%s)', (mode) => {
+    render(<QuestionCard question={choice} index={1} total={3} mode={mode} onNext={() => {}} onPrev={() => {}} canPrev />)
+    const nav = screen.getByRole('navigation', { name: 'Question navigation' })
+    expect(within(nav).getAllByRole('button').map((b) => b.textContent)).toEqual(['◂ Previous', 'Next ▸'])
+  })
+
   it('does not offer Next on the last question', () => {
     render(<QuestionCard question={choice} index={2} total={3} mode="study" onNext={() => {}} />)
     expect((btn('Next ▸') as HTMLButtonElement).disabled).toBe(true)

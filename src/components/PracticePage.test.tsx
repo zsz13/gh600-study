@@ -15,6 +15,8 @@ function Harness() {
 }
 
 const card = () => screen.getByRole('article')
+// The verdict chip ("✓ Correct", "✕ Incorrect · 1 of 3 pairs"), not a per-step "✓ Correct position" mark.
+const VERDICT = /^(✓ Correct|✕ Incorrect)( ·|$)/
 const stem = () => within(card()).getByRole('heading').textContent
 
 // Answers whatever question type is on screen, the way a user would.
@@ -40,7 +42,7 @@ describe('practice session', () => {
     await answerCurrent(user)
 
     expect(stem()).toBe(before)
-    expect(within(card()).getByText(/✓ Correct|✕ Incorrect/)).toBeTruthy()
+    expect(within(card()).getByText(VERDICT)).toBeTruthy()
   })
 
   it('keeps the question on screen when it is flagged in Shuffle mode', async () => {
@@ -88,7 +90,7 @@ describe('practice session', () => {
     const total = Number(screen.getByText(/\d+ \/ \d+/).textContent!.split('/')[1])
     for (let i = 0; i < total; i++) {
       await answerCurrent(user)
-      expect(within(card()).getByText(/✓ Correct|✕ Incorrect/)).toBeTruthy()
+      expect(within(card()).getByText(VERDICT)).toBeTruthy()
       if (i < total - 1) await user.click(within(card()).getByRole('button', { name: 'Next ▸' }))
     }
   }, 60_000)

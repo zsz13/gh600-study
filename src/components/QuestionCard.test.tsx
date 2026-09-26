@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { FlatQuestion } from '../types'
 import QuestionCard from './QuestionCard'
@@ -46,6 +46,21 @@ const order: FlatQuestion = {
   stem: 'Order it',
   options: ['one', 'two', 'three'],
   correct: 'one -> two -> three',
+}
+
+const MCP_STEPS = [
+  'Open organization Settings',
+  'Navigate to Copilot > Policies',
+  'Enable MCP servers',
+  'Enter the registry base URL',
+  'Choose the allow list policy',
+]
+const steps: FlatQuestion = {
+  ...base,
+  type: 'drag_drop_order',
+  stem: 'Configure an MCP registry',
+  options: MCP_STEPS,
+  correct: MCP_STEPS.join(' -> '),
 }
 
 const btn = (name: string | RegExp) => screen.getByRole('button', { name })
@@ -435,51 +450,275 @@ describe('fill in the blank', () => {
 })
 
 describe('order the steps', () => {
-  const rows = () => within(screen.getByRole('list')).getAllByRole('listitem').map((li) => li.textContent)
+  const [open, navigate, enable, url, policy] = MCP_STEPS
+  // Each step has a native position picker named after it; the pickers run in displayed order.
+  const position = (step: string) => screen.getByRole('combobox', { name: `Position of ${step}` }) as HTMLSelectElement
+  const pickers = () => screen.getAllByRole('combobox') as HTMLSelectElement[]
+  const shown = () => pickers().map((s) => s.getAttribute('aria-label')!.replace(/^Position of /, ''))
+  const numbers = () => pickers().map((s) => s.value)
+  const row = (step: string) => position(step).closest('li')!
+  const handle = (step: string) => row(step).querySelector('[data-handle]')!
+  const seeded = (shownOrder: string[]) => study(steps, { initialAnswer: shownOrder.join(' -> ') })
 
-  it('can be checked as displayed: the shown order is the answer', () => {
-    study(order)
-    expect((btn('Check answer') as HTMLButtonElement).disabled).toBe(false)
+  // jsdom has no layout: give each row its place in the list (62px tall, 8px apart) and the box it is
+  // drawn in on screen, which starts 100px down the window.
+  const drawAt = (step: string, top: number) => {
+    const box = { x: 0, y: top, left: 0, top, width: 600, height: 62, right: 600, bottom: top + 62 }
+    vi.spyOn(row(step), 'getBoundingClientRect').mockReturnValue({ ...box, toJSON: () => box })
+  }
+  const layOut = () =>
+    shown().forEach((step, i) => {
+      Object.defineProperty(row(step), 'offsetTop', { configurable: true, value: i * 70 })
+      Object.defineProperty(row(step), 'offsetHeight', { configurable: true, value: 62 })
+      drawAt(step, 100 + i * 70)
+    })
+  const middle = (i: number) => 100 + i * 70 + 31
+  const press = (target: Element, clientY: number, pointerType = 'mouse', more: PointerEventInit = {}) =>
+    fireEvent.pointerDown(target, { pointerId: 1, pointerType, isPrimary: true, button: 0, buttons: 1, clientY, ...more })
+  // Moves with the button (or finger) still down.
+  const drag = (clientY: number) => fireEvent.pointerMove(window, { pointerId: 1, isPrimary: true, buttons: 1, clientY })
+  const drop = (clientY: number) => fireEvent.pointerUp(window, { pointerId: 1, isPrimary: true, clientY })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it('can be checked as displayed: the shown order is the answer', async () => {
+    const user = userEvent.setup()
+    const { onAnswer } = seeded([url, open, navigate, enable, policy])
+    expect(shown()).toEqual([url, open, navigate, enable, policy])
+    expect(numbers()).toEqual(['1', '2', '3', '4', '5'])
+    await user.click(btn('Check answer'))
+    expect(onAnswer).toHaveBeenCalledWith('q1', `${url} -> ${open} -> ${navigate} -> ${enable} -> ${policy}`, false)
   })
 
   it('never starts in the solved order', () => {
     for (let i = 0; i < 10; i++) {
       study(order)
-      const shown = rows().map((t) => ['one', 'two', 'three'].find((o) => t?.includes(o)))
-      expect(shown).not.toEqual(['one', 'two', 'three'])
+      expect(shown()).not.toEqual(['one', 'two', 'three'])
       cleanup()
     }
   })
 
-  it('keeps keyboard focus on the moved step', async () => {
+  it('moves the last step to the top in one choice, and that order is what gets checked', async () => {
     const user = userEvent.setup()
-    study(order)
-    const first = rows()[0]!.match(/one|two|three/)![0]
-    btn(`Move "${first}" down`).focus()
-    await user.keyboard('{Enter}')
-    expect(document.activeElement).toBe(btn(`Move "${first}" down`))
-    expect(rows()[1]).toContain(first)
+    const { onAnswer } = seeded([navigate, enable, url, policy, open])
+    await user.selectOptions(position(open), '1')
+    expect(shown()).toEqual([open, navigate, enable, url, policy])
+    expect(numbers()).toEqual(['1', '2', '3', '4', '5'])
+    await user.click(btn('Check answer'))
+    expect(onAnswer).toHaveBeenCalledWith('q1', steps.correct, true)
   })
 
-  it('marks moves past either end unavailable, and they do nothing', async () => {
+  it('inserts a step at its new position instead of swapping it', async () => {
     const user = userEvent.setup()
-    study(order)
-    const before = rows()
-    const [top, , bottom] = before.map((t) => t!.match(/one|two|three/)![0])
-    expect(btn(`Move "${top}" up`).getAttribute('aria-disabled')).toBe('true')
-    expect(btn(`Move "${bottom}" down`).getAttribute('aria-disabled')).toBe('true')
-    await user.click(btn(`Move "${top}" up`))
-    expect(rows()).toEqual(before)
+    seeded([open, navigate, enable, url, policy])
+    await user.selectOptions(position(open), '3')
+    expect(shown()).toEqual([navigate, enable, open, url, policy])
   })
 
-  it('keeps keyboard focus on a step moved to the top', async () => {
+  it('announces a move with the step, where it was, where it is now, and how many steps there are', async () => {
     const user = userEvent.setup()
-    study(order)
-    const second = rows()[1]!.match(/one|two|three/)![0]
-    btn(`Move "${second}" up`).focus()
-    await user.keyboard('{Enter}')
-    expect(rows()[0]).toContain(second)
-    expect(document.activeElement).toBe(btn(`Move "${second}" up`))
+    seeded([url, navigate, enable, open, policy])
+    await user.selectOptions(position(open), '2')
+    expect(announced()).toBe('Open organization Settings moved from position 4 to position 2 of 5.')
+  })
+
+  it('keeps keyboard focus on a moved step', async () => {
+    const user = userEvent.setup()
+    seeded([navigate, enable, url, policy, open])
+    position(navigate).focus()
+    await user.selectOptions(position(navigate), '4')
+    expect(shown()[3]).toBe(navigate)
+    expect(document.activeElement).toBe(position(navigate))
+  })
+
+  it('drags a step straight to a new place with the mouse', () => {
+    seeded([url, navigate, enable, open, policy])
+    layOut()
+    press(row(open), middle(3))
+    drag(middle(0) - 5)
+    drop(middle(0) - 5)
+    expect(shown()).toEqual([open, url, navigate, enable, policy])
+    expect(announced()).toBe('Open organization Settings moved from position 4 to position 1 of 5.')
+  })
+
+  it('numbers the steps as they would land while one is being dragged', () => {
+    seeded([url, navigate, enable, open, policy])
+    layOut()
+    press(row(open), middle(3))
+    drag(middle(1) - 5)
+    // Nothing moves in the list until the drop, but every number already shows where its step will be.
+    expect(shown()).toEqual([url, navigate, enable, open, policy])
+    expect(numbers()).toEqual(['1', '3', '4', '2', '5'])
+    expect(within(row(open)).getByText('Moving')).toBeTruthy()
+  })
+
+  it('lands a drag where the pointer is, even while the rows are still sliding from the last move', () => {
+    seeded([url, navigate, enable, open, policy])
+    layOut()
+    // Mid-slide, the first row is drawn 200px below its place in the list.
+    drawAt(url, 300)
+    press(row(open), middle(3))
+    drag(middle(1) - 5)
+    drop(middle(1) - 5)
+    expect(shown()).toEqual([url, open, navigate, enable, policy])
+  })
+
+  it('drops a step dragged past the end of the list in last place', () => {
+    seeded([open, url, navigate, enable, policy])
+    layOut()
+    press(row(url), middle(1))
+    drag(700)
+    drop(700)
+    expect(shown()).toEqual([open, navigate, enable, policy, url])
+  })
+
+  it('treats a press that barely moves as a click, not a drag', () => {
+    seeded([url, navigate, enable, open, policy])
+    layOut()
+    press(row(url), middle(0))
+    drag(middle(0) + 3)
+    drop(middle(0) + 3)
+    expect(shown()).toEqual([url, navigate, enable, open, policy])
+    expect(announced()).toBe('')
+  })
+
+  it('on touch, drags only from the handle, so the rest of the row still scrolls the page', () => {
+    seeded([url, navigate, enable, open, policy])
+    layOut()
+    press(within(row(open)).getByText(open), middle(3), 'touch')
+    drag(middle(0) - 5)
+    drop(middle(0) - 5)
+    expect(shown()).toEqual([url, navigate, enable, open, policy])
+
+    press(handle(open), middle(3), 'touch')
+    drag(middle(0) - 5)
+    drop(middle(0) - 5)
+    expect(shown()).toEqual([open, url, navigate, enable, policy])
+  })
+
+  it.each([
+    ['Escape is pressed', () => fireEvent.keyDown(window, { key: 'Escape' })],
+    ['the browser cancels the pointer', () => fireEvent.pointerCancel(window, { pointerId: 1, isPrimary: true })],
+    ['the window loses focus', () => fireEvent.blur(window)],
+    ['a context menu opens', () => fireEvent.contextMenu(window)],
+    // The release was swallowed (by a context menu, say): the next move arrives with no button down.
+    ['the button turns out to be up', () => fireEvent.pointerMove(window, { pointerId: 1, isPrimary: true, buttons: 0, clientY: 200 })],
+  ])('puts a dragged step back when %s, and says so', (_when, cancel) => {
+    seeded([url, navigate, enable, open, policy])
+    layOut()
+    press(row(open), middle(3))
+    drag(middle(0) - 5)
+    cancel()
+    drop(middle(0) - 5)
+    expect(shown()).toEqual([url, navigate, enable, open, policy])
+    expect(numbers()).toEqual(['1', '2', '3', '4', '5'])
+    expect(announced()).toBe('Move cancelled. Open organization Settings is back at position 4.')
+  })
+
+  it.each([
+    ['the right mouse button', (step: string) => press(row(step), middle(3), 'mouse', { button: 2, buttons: 2 })],
+    ['a second finger', (step: string) => press(handle(step), middle(3), 'touch', { isPrimary: false })],
+    ['its position picker', (step: string) => press(position(step), middle(3))],
+  ])('does not drag a step pressed with %s', (_with, pressWith) => {
+    seeded([url, navigate, enable, open, policy])
+    layOut()
+    pressWith(open)
+    drag(middle(0) - 5)
+    drop(middle(0) - 5)
+    expect(shown()).toEqual([url, navigate, enable, open, policy])
+  })
+
+  it.each([
+    ['bottom', 'down', 760, 1],
+    ['top', 'up', 10, -1],
+  ])('scrolls the page while a step is held near the %s of the window', (_edge, _way, clientY, sign) => {
+    const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
+    const frames: FrameRequestCallback[] = []
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((frame) => frames.push(frame))
+    seeded([url, navigate, enable, open, policy])
+    layOut()
+    press(row(enable), middle(2))
+    drag(clientY)
+    frames.shift()!(0)
+    expect(Math.sign(scrollBy.mock.calls[0][1] as number)).toBe(sign)
+    drop(clientY)
+  })
+
+  it.each([
+    ['slides moved rows from their old places to their new ones', false],
+    ['moves rows without sliding them when reduced motion is asked for', true],
+  ])('%s', async (_what, reduce) => {
+    const user = userEvent.setup()
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: reduce && query === '(prefers-reduced-motion: reduce)' }))
+    seeded([navigate, enable, url, policy, open])
+    // Each row is drawn wherever it currently sits in the list, 70px apart.
+    const slides = new Map(
+      shown().map((step) => {
+        const li = row(step)
+        vi.spyOn(li, 'getBoundingClientRect').mockImplementation(() => {
+          const top = 100 + [...li.parentElement!.children].indexOf(li) * 70
+          return { x: 0, y: top, left: 0, top, width: 600, height: 62, right: 600, bottom: top + 62, toJSON: () => ({}) }
+        })
+        const animate = vi.fn()
+        li.animate = animate as unknown as Element['animate']
+        return [step, animate]
+      }),
+    )
+    await user.selectOptions(position(open), '1')
+    expect(shown()).toEqual([open, navigate, enable, url, policy])
+    if (reduce) for (const animate of slides.values()) expect(animate).not.toHaveBeenCalled()
+    else {
+      // From the bottom (380px) up to the top (100px); the others each drop one row.
+      expect(slides.get(open)).toHaveBeenCalledWith([{ transform: 'translateY(280px)' }, { transform: 'none' }], expect.anything())
+      expect(slides.get(navigate)).toHaveBeenCalledWith([{ transform: 'translateY(-70px)' }, { transform: 'none' }], expect.anything())
+    }
+  })
+
+  it('ignores a drag still held when the answer gets checked', () => {
+    const { onAnswer } = seeded([url, navigate, enable, open, policy])
+    layOut()
+    press(row(open), middle(3))
+    drag(middle(0) - 5)
+    // Checked from the keyboard while the mouse button is still down.
+    fireEvent.click(btn('Check answer'))
+    drop(middle(0) - 5)
+    const yours = within(screen.getByRole('list', { name: 'Your order' })).getAllByRole('listitem')
+    expect(yours.map((li) => MCP_STEPS.find((step) => li.textContent!.includes(step)))).toEqual([url, navigate, enable, open, policy])
+    expect(onAnswer).toHaveBeenCalledTimes(1)
+    expect(onAnswer).toHaveBeenCalledWith('q1', `${url} -> ${navigate} -> ${enable} -> ${open} -> ${policy}`, false)
+  })
+
+  it('marks every step right or wrong in words once checked, and lists the correct order', async () => {
+    const user = userEvent.setup()
+    seeded([navigate, open, enable, url, policy])
+    await user.click(btn('Check answer'))
+    const yours = within(screen.getByRole('list', { name: 'Your order' })).getAllByRole('listitem')
+    expect(yours.map((li) => li.textContent!.match(/✓ Correct position|✕ Belongs at position \d/)?.[0])).toEqual([
+      '✕ Belongs at position 2',
+      '✕ Belongs at position 1',
+      '✓ Correct position',
+      '✓ Correct position',
+      '✓ Correct position',
+    ])
+    const correct = within(screen.getByRole('list', { name: 'Correct order' })).getAllByRole('listitem')
+    expect(correct.map((li) => li.textContent)).toEqual(MCP_STEPS)
+  })
+
+  it('locks the order once checked, and records the attempt once', async () => {
+    const user = userEvent.setup()
+    const { onAnswer } = seeded([navigate, open, enable, url, policy])
+    await user.click(btn('Check answer'))
+    expect(screen.queryAllByRole('combobox')).toEqual([])
+    const yours = () => within(screen.getByRole('list', { name: 'Your order' })).getAllByRole('listitem')
+    expect(yours()[0].querySelector('[data-handle]')).toBeNull()
+    press(yours()[0], middle(0))
+    drag(700)
+    drop(700)
+    expect(yours()[0].textContent).toContain(navigate)
+    expect(onAnswer).toHaveBeenCalledTimes(1)
   })
 })
 

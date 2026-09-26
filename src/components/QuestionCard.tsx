@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { FlatQuestion, MatchPair } from '../types'
 import { isCorrect, matchSelections, shuffle } from '../lib/exam'
+import StepOrder from './StepOrder'
 
 interface QuestionCardProps {
   question: FlatQuestion
@@ -227,12 +228,7 @@ export default function QuestionCard({
       )}
 
       {question.type === 'drag_drop_order' && question.options && (
-        <DragDropOrder
-          value={answer}
-          revealed={revealed}
-          correct={question.correct}
-          onChange={setAnswer}
-        />
+        <StepOrder value={answer} graded={revealed} correct={question.correct} onChange={setAnswer} />
       )}
 
       {question.type === 'fill_blank' && (
@@ -310,85 +306,6 @@ export default function QuestionCard({
         </div>
       )}
     </article>
-  )
-}
-
-function DragDropOrder({
-  value,
-  revealed,
-  correct,
-  onChange,
-}: {
-  value: string
-  revealed: boolean
-  correct?: string
-  onChange: (v: string) => void
-}) {
-  const order = value.split(' -> ').map((s) => s.trim())
-
-  const move = (idx: number, dir: -1 | 1) => {
-    const newOrder = [...order]
-    const j = idx + dir
-    if (j < 0 || j >= newOrder.length) return
-    ;[newOrder[idx], newOrder[j]] = [newOrder[j], newOrder[idx]]
-    onChange(newOrder.join(' -> '))
-  }
-
-  const correctOrder = correct?.split(' -> ').map((s) => s.trim()) ?? []
-
-  return (
-    <ol className="space-y-2">
-      {order.map((opt, i) => {
-        const correctHere = revealed && correctOrder[i] === opt
-        const wrongHere = revealed && !correctHere
-        return (
-          // Keyed by content, not position, so a moved step keeps its DOM node and keyboard focus.
-          <li
-            key={opt}
-            className={`flex items-center gap-3 border rounded-lg p-3 ${
-              revealed
-                ? correctHere
-                  ? 'border-good/60 bg-good/10'
-                  : wrongHere
-                  ? 'border-bad/60 bg-bad/10'
-                  : 'border-line'
-                : 'border-line'
-            }`}
-          >
-            <div className="shrink-0 w-7 h-7 grid place-items-center rounded-md bg-bg-3 border border-line text-xs font-mono">
-              {i + 1}
-            </div>
-            <div className="flex-1 text-sm text-ink-dim">{opt}</div>
-            {!revealed && (
-              <div className="flex gap-1">
-                <button
-                  onClick={() => move(i, -1)}
-                  className="btn btn-ghost text-xs px-2"
-                  aria-label={`Move "${opt}" up`}
-                  aria-disabled={i === 0}
-                >
-                  ▴
-                </button>
-                <button
-                  onClick={() => move(i, 1)}
-                  className="btn btn-ghost text-xs px-2"
-                  aria-label={`Move "${opt}" down`}
-                  aria-disabled={i === order.length - 1}
-                >
-                  ▾
-                </button>
-              </div>
-            )}
-          </li>
-        )
-      })}
-      {revealed && correct && (
-        <li className="text-xs text-ink-mute pt-2">
-          <span className="font-semibold">Correct order:</span>{' '}
-          <span className="font-mono">{correct}</span>
-        </li>
-      )}
-    </ol>
   )
 }
 

@@ -15,10 +15,11 @@ function Harness() {
   return <MockExamPage state={state} setState={setState} />
 }
 
-function SeededHarness({ questionIds }: { questionIds: string[] }) {
+// A mock already in progress, as loaded from storage.
+function SeededHarness({ questionIds, answers = {} }: { questionIds: string[]; answers?: Record<string, string> }) {
   const [state, setState] = useState<AppState>(() => ({
     ...EMPTY,
-    activeMock: { startedAt: Date.now(), questionIds, answers: {} },
+    activeMock: { startedAt: Date.now(), questionIds, answers },
   }))
   return <MockExamPage state={state} setState={setState} />
 }
@@ -117,6 +118,56 @@ describe('mock exam', () => {
       await user.click(card().getByRole('radio', { name: (name) => name.includes(`. ${p.left}, `) }))
       await user.click(card().getByRole('button', { name: (name) => name.split(', matched with')[0] === right }))
     }
+    await user.click(card().getByRole('button', { name: 'Save and continue' }))
+    await user.click(screen.getByRole('button', { name: 'Submit and see score' }))
+    expect(screen.getByText(score)).toBeTruthy()
+  })
+})
+
+describe('mock exam: order the steps', () => {
+  const question = ALL_QUESTIONS.find((q) => q.type === 'drag_drop_order' && q.objectiveId === '2.2')!
+  const key = question.correct!.split(' -> ')
+  // The steps as displayed, read from each step's position picker.
+  const shown = () => card().queryAllByRole('combobox').map((s) => s.getAttribute('aria-label')!.replace(/^Position of /, ''))
+  const place = (user: UserEvent, step: string, at: number) =>
+    user.selectOptions(card().getByRole('combobox', { name: `Position of ${step}` }), String(at))
+
+  it('keeps a saved order when you move away and come back, without grading it, and it can still be changed', async () => {
+    const user = userEvent.setup()
+    render(<SeededHarness questionIds={[question.id, 'd1-1.1-1']} />)
+    const last = shown().at(-1)!
+    await place(user, last, 1)
+    const saved = shown()
+    expect(saved[0]).toBe(last)
+    await user.click(card().getByRole('button', { name: 'Save and continue' }))
+    expect(position()).toBe('2 / 2')
+
+    await user.click(card().getByRole('button', { name: '◂ Previous' }))
+
+    expect(shown()).toEqual(saved)
+    expect(card().getByText('✓ Saved')).toBeTruthy()
+    expect(card().queryByText(/Correct position|Belongs at|Correct order|Explanation|✓ Correct|✕ Incorrect/)).toBeNull()
+    await place(user, last, 2)
+    expect(shown()[1]).toBe(last)
+    expect(card().queryByText('✓ Saved')).toBeNull()
+  })
+
+  it('shows the order saved before a reload', () => {
+    const saved = [...key].reverse()
+    render(<SeededHarness questionIds={[question.id]} answers={{ [question.id]: saved.join(' -> ') }} />)
+    expect(shown()).toEqual(saved)
+    expect(card().getByText('✓ Saved')).toBeTruthy()
+  })
+
+  it.each([
+    ['the correct order', (steps: string[]) => steps, 'Score: 1000 / 1000'],
+    ['two steps swapped', (steps: string[]) => [steps[1], steps[0], ...steps.slice(2)], 'Score: 0 / 1000'],
+  ])('scores %s as saved', async (_label, arrange, score) => {
+    const user = userEvent.setup()
+    render(<SeededHarness questionIds={[question.id]} />)
+    const want = arrange(key)
+    for (const [i, step] of want.entries()) await place(user, step, i + 1)
+    expect(shown()).toEqual(want)
     await user.click(card().getByRole('button', { name: 'Save and continue' }))
     await user.click(screen.getByRole('button', { name: 'Submit and see score' }))
     expect(screen.getByText(score)).toBeTruthy()

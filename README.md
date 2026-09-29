@@ -8,14 +8,14 @@ A self-contained single-page app you run locally to drill the six exam domains: 
 
 ## What's inside
 
-- **Inicio** — what the exam is in plain language, exam logistics, beta testimonials, the six domains and their weights.
-- **Plan** — a 3-day intensive cram plan (~17h of study time) with checkable blocks. Tweak the dates in `src/config.ts` to your booking.
-- **Dominios** — cheatsheet per domain: key concepts, vocabulary, common pitfalls, GitHub features that get tested.
+- **Home** — what the exam is in plain language, exam logistics, beta testimonials, the six domains and their weights.
+- **Cram plan** — a 3-day intensive cram plan (~17h of study time) with checkable blocks. Tweak the dates in `src/config.ts` to your booking.
+- **Domains** — cheatsheet per domain: key concepts, vocabulary, common pitfalls, GitHub features that get tested.
 - **Cheatsheet** — 27 gotchas that consistently show up, glossary (searchable), critical file paths, CLI command reference, and a section on the exam's question style.
-- **Lab de artefactos** — 12 real-style snippets (YAML / JSON / logs / audit events) with a question, an explanation, and *why it matters* on the exam. This is the highest-yield section.
-- **Practica** — 151 scenario-based questions with full explanations, in the exam's formats (see below), with the case study last. Filter by domain / by what you got wrong / by what you flagged.
-- **Examen Mock** — 50 questions, 120-minute timer: 42 main questions weighted by the official domain percentages, then the 8-question case study. Score plus per-domain breakdown so you know where to drill next.
-- **Mi progreso** — KPIs, per-domain bars, mock run history.
+- **Artifact lab** — 12 real-style snippets (YAML / JSON / logs / audit events) with a question, an explanation, and *why it matters* on the exam. This is the highest-yield section.
+- **Practice** — 151 scenario-based questions with full explanations, in the exam's formats (see below), with the case study last. Filter by domain / by what you got wrong / by what you flagged.
+- **Mock exam** — 50 questions, 120-minute timer: 42 main questions weighted by the official domain percentages, then the 8-question case study. Score plus per-domain breakdown so you know where to drill next.
+- **My progress** — KPIs, per-domain bars, mock run history.
 
 ## Question formats and scoring
 
@@ -30,7 +30,7 @@ Besides single-answer, multi-select, ordering, fill-in-the-blank and match-pairs
 Scoring:
 
 - Multi-part questions (the four formats above) score **per slot**: in the mock, getting 2 of 3 placeholders right earns 2/3 of that question's point.
-- Every other type scores **all or nothing**, as before; match pairs included.
+- Every other type, match pairs included, scores **all or nothing**.
 - "Correct" in practice stats and the **Missed** filter means fully correct. A partly right answer is still offered again under Missed.
 - Each case-study question is scored, counted per domain and retried on its own.
 - A multi-part question can be checked or saved once every slot has an answer. Nothing is graded or explained during a mock until you submit it.
@@ -51,6 +51,8 @@ npm run build
 npm run preview
 ```
 
+Tests run with `npm test` (Vitest), and `npm run lint` runs ESLint.
+
 ## Configuring your exam date
 
 Open `src/config.ts` and set `EXAM_DATE` to your booking time in ISO 8601 with timezone:
@@ -58,7 +60,7 @@ Open `src/config.ts` and set `EXAM_DATE` to your booking time in ISO 8601 with t
 ```ts
 export const EXAM_DATE = '2026-07-15T10:00:00-05:00'
 export const EXAM_LOCATION_LABEL = '' // optional, shown next to the countdown
-export const EXAM_HEADER_LABEL = 'TU EXAMEN PROGRAMADO' // optional, top of home page
+export const EXAM_HEADER_LABEL = 'YOUR SCHEDULED EXAM' // optional, top of home page
 ```
 
 The countdown in the sidebar reads from this. The cram plan in `src/components/PlanPage.tsx` uses generic Day 1 / Day 2 / Day 3 labels — read it and slot it into your own dates.
@@ -67,7 +69,7 @@ The countdown in the sidebar reads from this. The cram plan in `src/components/P
 
 - Vite 8 + React 19 + TypeScript 6
 - Tailwind v4 (via `@tailwindcss/vite`, no separate config file)
-- No runtime dependencies beyond React. ~366 KB JS / ~114 KB gzipped. Works offline once loaded.
+- No runtime dependencies beyond React. ~540 KB JS / ~163 KB gzipped, including the whole question bank. Works offline once loaded.
 
 ## Credits and acknowledgments
 
@@ -111,4 +113,4 @@ MIT. See [LICENSE](LICENSE). Use it, fork it, send PRs, ship a translated versio
 
 ## Status
 
-Built in 36 hours by a candidate cramming for the May 29, 2026 beta. The plan, gotchas, and labs reflect what the public sources said as of late May 2026. After GA (July 2026) the official guide may evolve; cross-check before relying on any specific detail.
+Built in 36 hours by a candidate cramming for the May 29, 2026 beta. The plan, gotchas, and labs reflect what the public sources said as of late May 2026. After GA (July 2026) the official guide may evolve; cross-check before relying on any specific detail. In September 2026 the bank was extended with applied questions in the exam's interactive formats (workflow placeholders, answer banks, statement grids) and a shared case study, and its easiest original questions were rewritten as applied scenarios.

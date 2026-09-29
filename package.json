@@ -3,7 +3,7 @@
   "private": false,
   "version": "0.1.0",
   "license": "MIT",
-  "description": "Free, open study app for the GH-600 GitHub Certified: Agentic AI Developer (beta) exam. SPA with cram plan, 27 gotchas, 12 artifact labs, 87 practice questions, and a timed 50-question mock exam.",
+  "description": "Free, open study app for the GH-600 GitHub Certified: Agentic AI Developer (beta) exam. SPA with cram plan, 27 gotchas, 12 artifact labs, 151 practice questions, and a timed 50-question mock exam.",
   "keywords": ["gh-600", "gh600", "github", "agentic-ai", "copilot", "certification", "exam-prep", "mcp", "custom-agents"],
   "type": "module",
   "scripts": {

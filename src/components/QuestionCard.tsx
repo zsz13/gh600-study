@@ -1,9 +1,15 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { FlatQuestion, MatchPair } from '../types'
-import { isCorrect, matchSelections, shuffle } from '../lib/exam'
+import { answerOrder, isCorrect, matchSelections, shuffle } from '../lib/exam'
 import { plainText } from '../lib/richText'
+import { isSlotQuestion, slotPicks, slotScore } from '../lib/slots'
+import AnswerBank from './AnswerBank'
+import CaseStudyPanel from './CaseStudyPanel'
 import RichText from './RichText'
+import SlotFill from './SlotFill'
+import SlotReview from './SlotReview'
+import StatementGrid from './StatementGrid'
 import StepOrder from './StepOrder'
 
 interface QuestionCardProps {
@@ -34,7 +40,20 @@ const TYPE_LABEL: Record<string, string> = {
   fill_blank: 'Fill in the blank',
   match_pairs: 'Match pairs',
   case_study: 'Case study (check context above)',
+  code_fill: 'Complete the code',
+  text_fill: 'Complete the statement',
+  answer_bank: 'Assign from the answer bank',
+  yes_no_grid: 'Statement grid',
 }
+
+// What a multi-part question's slots are called, and what doing one is called, for its progress and verdict.
+const SLOT_WORDS: Record<string, [string, string]> = {
+  code_fill: ['placeholder', 'chosen'],
+  text_fill: ['placeholder', 'chosen'],
+  answer_bank: ['requirement', 'filled'],
+  yes_no_grid: ['statement', 'answered'],
+}
+const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`
 
 // The answer an ordering question starts from: what the list shows is what gets checked,
 // and it is never already solved.
@@ -69,11 +88,14 @@ export default function QuestionCard({
   const [answer, setAnswer] = useState<string>(
     () => initialAnswer ?? (question.type === 'drag_drop_order' ? scrambledOrder(question) : ''),
   )
-  // A match is answered once every item has a pick (so an old "self-correct" self-grade reads as
-  // unanswered); the other types once there is any answer.
+  // A match or a multi-part question is answered once every item or slot has a pick (so an old
+  // "self-correct" self-grade reads as unanswered); the other types once there is any answer.
+  const slotted = isSlotQuestion(question)
   const pairCount = question.pairs?.length ?? 0
-  const picks = question.type === 'match_pairs' ? matchSelections(answer, pairCount) : []
-  const answered = question.type === 'match_pairs' ? pairCount > 0 && !picks.includes(undefined) : !!answer
+  const picks =
+    question.type === 'match_pairs' ? matchSelections(answer, pairCount) : slotted ? slotPicks(question, answer) : []
+  const filled = picks.filter((pick) => pick !== undefined).length
+  const answered = question.type === 'match_pairs' || slotted ? picks.length > 0 && filled === picks.length : !!answer
   // Graded in study mode. A mock never reveals: saving records the answer and moves on.
   const [revealed, setRevealed] = useState<boolean>(!!showSolutionInitially)
   const saved = mode === 'mock' && answered && answer === initialAnswer
@@ -111,9 +133,20 @@ export default function QuestionCard({
   }
 
   let verdict = correct ? '✓ Correct' : '✕ Incorrect'
+  let verdictTone = correct ? 'chip-good' : 'chip-bad'
   if (question.type === 'match_pairs') {
     const hits = picks.filter((pick, item) => pick === item).length
     verdict += ` · ${hits} of ${pairCount} pairs`
+  }
+  // Multi-part questions earn credit per slot, so a partly right answer says so.
+  const [slotNoun, slotVerb] = SLOT_WORDS[question.type] ?? ['part', 'done']
+  if (slotted) {
+    const { hits, total } = slotScore(question, answer)
+    if (!correct && hits > 0) {
+      verdict = '◐ Partly correct'
+      verdictTone = 'chip-warn'
+    }
+    verdict += ` · ${hits} of ${count(total, slotNoun)}`
   }
 
   const optionLetter = (i: number) => String.fromCharCode(65 + i)
@@ -174,6 +207,13 @@ export default function QuestionCard({
           </button>
         )}
       </header>
+
+      {question.caseStudy && (
+        <div className="mb-4">
+          {/* The scenario is shown in full once, with the case's first question; the others offer it on demand. */}
+          <CaseStudyPanel caseStudy={question.caseStudy} part={question.casePart} open={question.casePart?.index === 0} />
+        </div>
+      )}
 
       <h2
         ref={headingRef}
@@ -255,6 +295,20 @@ export default function QuestionCard({
         </div>
       )}
 
+      {(question.type === 'code_fill' || question.type === 'text_fill') && (
+        <SlotFill question={question} value={answer} graded={revealed} onChange={setAnswer} />
+      )}
+
+      {question.type === 'answer_bank' && !revealed && <AnswerBank question={question} value={answer} onChange={setAnswer} />}
+
+      {question.type === 'yes_no_grid' && !revealed && <StatementGrid question={question} value={answer} onChange={setAnswer} />}
+
+      {slotted && revealed && (
+        <div className="mt-4">
+          <SlotReview question={question} given={answer} />
+        </div>
+      )}
+
       {question.type === 'match_pairs' && question.pairs && (
         <MatchPairs
           questionId={question.id}
@@ -279,12 +333,17 @@ export default function QuestionCard({
         )}
         {question.type === 'match_pairs' && !revealed && (
           <span className="text-xs text-ink-mute">
-            {picks.filter((pick) => pick !== undefined).length} of {pairCount} matched
+            {filled} of {pairCount} matched
+          </span>
+        )}
+        {slotted && !revealed && (
+          <span className={`text-xs ${answered ? 'text-ink-mute' : 'text-warn'}`}>
+            {filled} of {count(picks.length, slotNoun)} {slotVerb}
           </span>
         )}
         {saved && <div className="chip chip-good">✓ Saved</div>}
         {revealed && mode === 'study' && (
-          <div ref={verdictRef} tabIndex={-1} className={`chip ${correct ? 'chip-good' : 'chip-bad'}`}>
+          <div ref={verdictRef} tabIndex={-1} className={`chip ${verdictTone}`}>
             {verdict}
           </div>
         )}
@@ -318,19 +377,6 @@ export default function QuestionCard({
       )}
     </article>
   )
-}
-
-// Each question's answer order for this page session: shuffled once, then the same on every visit,
-// and never the key's own order (where item n's match would sit at position n).
-const answerOrders = new Map<string, number[]>()
-function answerOrder(questionId: string, size: number): number[] {
-  let order = answerOrders.get(questionId)
-  if (!order) {
-    order = shuffle(Array.from({ length: size }, (_, choice) => choice))
-    if (size > 1 && order.every((choice, i) => choice === i)) order = [...order.slice(1), order[0]]
-    answerOrders.set(questionId, order)
-  }
-  return order
 }
 
 // Pick an item, then its answer. Items are a native radio group choosing which item the next answer

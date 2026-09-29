@@ -2,7 +2,7 @@
 
 Free, open study app for the **GH-600 — GitHub Certified: Agentic AI Developer (beta)** exam.
 
-A self-contained single-page app you run locally to drill the six exam domains: cram plan, cheatsheet, 12 artifact labs, 87 practice questions, and a timed 50-question mock with per-domain scoring. Progress is stored in your browser's localStorage. No backend, no telemetry, no signup.
+A self-contained single-page app you run locally to drill the six exam domains: cram plan, cheatsheet, 12 artifact labs, 151 practice questions (143 main questions and an 8-question case study), and a timed 50-question mock with per-domain scoring. Progress is stored in your browser's localStorage. No backend, no telemetry, no signup.
 
 > **Unofficial.** Not affiliated with or endorsed by GitHub or Microsoft. Always cross-check against the [official study guide](https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/gh-600).
 
@@ -13,9 +13,27 @@ A self-contained single-page app you run locally to drill the six exam domains: 
 - **Dominios** — cheatsheet per domain: key concepts, vocabulary, common pitfalls, GitHub features that get tested.
 - **Cheatsheet** — 27 gotchas that consistently show up, glossary (searchable), critical file paths, CLI command reference, and a section on the exam's question style.
 - **Lab de artefactos** — 12 real-style snippets (YAML / JSON / logs / audit events) with a question, an explanation, and *why it matters* on the exam. This is the highest-yield section.
-- **Practica** — 87 scenario-based questions with full explanations. Filter by domain / by what you got wrong / by what you flagged.
-- **Examen Mock** — 50 questions, 120-minute timer, weighted by the official domain percentages. Score plus per-domain breakdown so you know where to drill next.
+- **Practica** — 151 scenario-based questions with full explanations, in the exam's formats (see below), with the case study last. Filter by domain / by what you got wrong / by what you flagged.
+- **Examen Mock** — 50 questions, 120-minute timer: 42 main questions weighted by the official domain percentages, then the 8-question case study. Score plus per-domain breakdown so you know where to drill next.
 - **Mi progreso** — KPIs, per-domain bars, mock run history.
+
+## Question formats and scoring
+
+Besides single-answer, multi-select, ordering, fill-in-the-blank and match-pairs questions, the bank has:
+
+- **Complete the code** — a GitHub Actions workflow or agent profile with 1–3 placeholders, each chosen from its own dropdown.
+- **Complete the statement** — a sentence with 2–3 placeholders, each with its own dropdown.
+- **Answer bank** — 3–4 requirements, each filled from one shared bank of 6–8 answers (drag an answer onto a requirement, or tap an answer and then a requirement; each answer is used once).
+- **Statement grid** — Yes/No or True/False, one answer per statement.
+- **Case study** — one shared scenario (repository structure, agents, dependencies, workflows, permissions, branches, controls, artifacts, failures and requirements) followed by 8 questions about it. It comes last: at the end of practice, and as the final 8 questions of every mock. The scenario is shown in full with its first question and one click away on the others.
+
+Scoring:
+
+- Multi-part questions (the four formats above) score **per slot**: in the mock, getting 2 of 3 placeholders right earns 2/3 of that question's point.
+- Every other type scores **all or nothing**, as before; match pairs included.
+- "Correct" in practice stats and the **Missed** filter means fully correct. A partly right answer is still offered again under Missed.
+- Each case-study question is scored, counted per domain and retried on its own.
+- A multi-part question can be checked or saved once every slot has an answer. Nothing is graded or explained during a mock until you submit it.
 
 ## Getting started
 

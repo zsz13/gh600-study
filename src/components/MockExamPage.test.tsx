@@ -26,8 +26,11 @@ function SeededHarness({ questionIds, answers = {} }: { questionIds: string[]; a
 
 const card = () => within(screen.getByRole('article'))
 const position = () => card().getByText(/^\d+ \/ \d+$/).textContent
-// A match-pairs card's items, each named with its current match.
-const matchItems = () => card().queryAllByRole('radio').map((r) => r.getAttribute('aria-label'))
+// A match-pairs card's items, each named with its current match (not a statement grid's Yes/No radios).
+const matchItems = () => {
+  const items = card().queryByRole('group', { name: 'Items' })
+  return items ? within(items).getAllByRole('radio').map((r) => r.getAttribute('aria-label')) : []
+}
 const answerButtons = () => {
   const answers = card().queryByRole('group', { name: /^Answers/ })
   return answers ? within(answers).getAllByRole('button') : []
@@ -36,10 +39,22 @@ const answerButtons = () => {
 // Gives whatever mock question is on screen an answer, the way a user would.
 async function answerCurrent(user: UserEvent) {
   const answers = answerButtons()
+  const bank = card().queryByRole('group', { name: 'Answer bank' })
+  const selects = card().queryAllByRole('combobox', { name: /^Placeholder \d+$/ })
+  const statements = card().queryAllByRole('radiogroup')
   const input = card().queryByRole('textbox')
   const option = card().queryAllByRole('button').find((b) => b.closest('ul'))
   // Each answer goes to the current item, and the target then moves to the next unmatched one.
   if (answers.length) for (const a of answers) await user.click(a)
+  else if (bank) {
+    // Tap an answer, then an empty requirement, until every requirement is filled.
+    const chips = within(bank).getAllByRole('button')
+    for (const [i, requirement] of card().getAllByRole('button', { name: /^Requirement \d+, empty$/ }).entries()) {
+      await user.click(chips[i])
+      await user.click(requirement)
+    }
+  } else if (selects.length) for (const select of selects) await user.selectOptions(select, '0')
+  else if (statements.length) for (const s of statements) await user.click(within(s).getAllByRole('radio')[0])
   else if (input) await user.type(input, 'x')
   else if (option) await user.click(option)
   // ordering questions already hold their displayed order as the answer
@@ -196,5 +211,51 @@ describe('mock exam: results', () => {
     const flagged = review.getByRole('article', { name: 'Question 1' })
     expect(within(flagged).getByText('⚑ Flagged')).toBeTruthy()
     expect(within(flagged).getByText('✕ Incorrect')).toBeTruthy()
+  })
+})
+
+describe('mock exam: multi-part questions', () => {
+  it('saves a code question only once every placeholder is chosen, reveals nothing, and scores it per placeholder', async () => {
+    const user = userEvent.setup()
+    render(<SeededHarness questionIds={['ap-wf-1']} />)
+    const save = () => card().getByRole('button', { name: 'Save and continue' }) as HTMLButtonElement
+    const placeholder = (n: number) => card().getByRole('combobox', { name: `Placeholder ${n}` })
+    await user.selectOptions(placeholder(1), 'actions/upload-artifact@v4')
+    await user.selectOptions(placeholder(2), 'needs')
+    expect(save().disabled).toBe(true)
+    expect(card().getByText('2 of 3 placeholders chosen')).toBeTruthy()
+    await user.selectOptions(placeholder(3), 'actions/cache/restore@v4') // wrong
+    await user.click(save())
+    expect(screen.getByRole('button', { name: 'Question 1, answered' })).toBeTruthy()
+    expect(screen.queryByText(/Correct answer|Your answers|Explanation|Partly/)).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Submit and see score' }))
+    expect(screen.getByRole('heading', { name: 'Score: 667 / 1000' })).toBeTruthy()
+  })
+})
+
+describe('mock exam: case study section', () => {
+  it('ends with the case study: 42 main questions, then its 8 questions under their own label, the scenario shown in full once', async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    await user.click(screen.getByRole('button', { name: 'Start the mock now' }))
+    const jump = screen.getAllByRole('button', { name: /^Question \d+/ })
+    expect(jump).toHaveLength(50)
+    const caseButtons = jump.filter((b) => b.getAttribute('aria-label')!.includes(', case study question'))
+    expect(caseButtons.map((b) => b.textContent)).toEqual(['43', '44', '45', '46', '47', '48', '49', '50'])
+    expect(caseButtons[0].getAttribute('aria-label')).toBe('Question 43, case study question 1 of 8')
+    // The section label sits right before question 43.
+    expect(caseButtons[0].previousElementSibling!.textContent).toBe('Case study')
+
+    await user.click(caseButtons[0])
+    expect(position()).toBe('43 / 50')
+    expect(screen.getByText(/Case study, question 1 of 8/)).toBeTruthy()
+    const scenario = () => card().getByText('Northwind Payments: the agent pipeline').closest('details')!
+    expect(scenario().open).toBe(true)
+    expect(card().queryByText(/Your answer|Correct answer|Explanation/)).toBeNull()
+
+    await user.click(card().getByRole('button', { name: 'Next ▸' }))
+    expect(position()).toBe('44 / 50')
+    expect(scenario().open).toBe(false) // not repeated, one select away
   })
 })

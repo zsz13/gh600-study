@@ -1,6 +1,9 @@
 import dataRaw from '../data.json'
 import { EXTRA_QUESTIONS } from '../data/extra-questions'
+import { APPLIED_QUESTIONS } from '../data/applied-questions'
+import { CASE_STUDY_QUESTIONS } from '../data/case-studies'
 import type { DataShape, Domain, FlatQuestion, MockExamRun, Question } from '../types'
+import { isSlotQuestion, slotScore } from './slots'
 
 export const data = dataRaw as unknown as DataShape
 
@@ -47,9 +50,18 @@ export function flattenQuestions(domains: Domain[] = DOMAINS): FlatQuestion[] {
   return flat
 }
 
-export const ALL_QUESTIONS: FlatQuestion[] = [...flattenQuestions(), ...EXTRA_QUESTIONS]
+export const ALL_QUESTIONS: FlatQuestion[] = [
+  ...flattenQuestions(),
+  ...EXTRA_QUESTIONS,
+  ...APPLIED_QUESTIONS,
+  ...CASE_STUDY_QUESTIONS,
+]
 
 export const QUESTION_BY_ID = new Map(ALL_QUESTIONS.map((q) => [q.id, q]))
+
+// The exam's two sections: the main questions, then the case study, whose questions share one scenario.
+export const MAIN_QUESTIONS = ALL_QUESTIONS.filter((q) => !q.caseStudy)
+export const CASE_QUESTIONS = ALL_QUESTIONS.filter((q) => q.caseStudy)
 
 export const QUESTIONS_BY_DOMAIN: Record<number, FlatQuestion[]> = ALL_QUESTIONS.reduce(
   (acc, q) => {
@@ -68,8 +80,22 @@ export function shuffle<T>(arr: T[]): T[] {
   return a
 }
 
-export function buildMockSet(count: number): FlatQuestion[] {
-  // Roughly weight by domain weight midpoint so the exam feels real.
+// Each question's answer order for this page session: shuffled once, then the same on every visit,
+// and never the data's own order (where a match pair's answer would sit next to its item).
+const answerOrders = new Map<string, number[]>()
+export function answerOrder(questionId: string, size: number): number[] {
+  let order = answerOrders.get(questionId)
+  if (!order) {
+    order = shuffle(Array.from({ length: size }, (_, choice) => choice))
+    if (size > 1 && order.every((choice, i) => choice === i)) order = [...order.slice(1), order[0]]
+    answerOrders.set(questionId, order)
+  }
+  return order
+}
+
+// A mock, laid out like the exam: `mainCount` main questions weighted by the domain weight midpoints and
+// shuffled, then the whole case study, in order.
+export function buildMockSet(mainCount: number): FlatQuestion[] {
   const weights: Record<number, number> = {
     1: 0.175, // 15-20
     2: 0.225, // 20-25
@@ -78,13 +104,16 @@ export function buildMockSet(count: number): FlatQuestion[] {
     5: 0.175, // 15-20
     6: 0.125, // 10-15
   }
-  const picks: FlatQuestion[] = []
-  for (const dom of DOMAINS) {
-    const target = Math.max(2, Math.round(count * (weights[dom.domain_id] ?? 0.17)))
-    const pool = shuffle(QUESTIONS_BY_DOMAIN[dom.domain_id] ?? [])
-    picks.push(...pool.slice(0, target))
-  }
-  return shuffle(picks).slice(0, count)
+  // Each domain's share rounded down, then the leftover questions to the largest remainders, so the
+  // targets add up to exactly mainCount.
+  const shares = DOMAINS.map((d) => mainCount * (weights[d.domain_id] ?? 0))
+  const targets = shares.map(Math.floor)
+  const byRemainder = shares.map((share, i) => ({ i, rest: share - targets[i] })).sort((a, b) => b.rest - a.rest)
+  for (const { i } of byRemainder.slice(0, mainCount - targets.reduce((a, b) => a + b, 0))) targets[i] += 1
+  const picks = DOMAINS.flatMap((d, i) =>
+    shuffle(MAIN_QUESTIONS.filter((q) => q.domainId === d.domain_id)).slice(0, targets[i]),
+  )
+  return [...shuffle(picks), ...CASE_QUESTIONS]
 }
 
 export function normalizeAnswer(s: string): string {
@@ -113,6 +142,10 @@ export function isCorrect(q: Question, given: string): boolean {
     // `pairs` is the key: every left item sits with its own right-hand value, so the answer is "0,1,2,…".
     return !!q.pairs?.length && given === q.pairs.map((_, i) => i).join(',')
   }
+  if (isSlotQuestion(q)) {
+    const { hits, total } = slotScore(q, given)
+    return total > 0 && hits === total
+  }
   if (!q.correct) return false
   if (q.type === 'multi_select') {
     const a = new Set(given.split(',').map((x) => x.trim().toUpperCase()))
@@ -130,11 +163,24 @@ export function isCorrect(q: Question, given: string): boolean {
   return given.trim().toUpperCase() === (q.correct || '').trim().toUpperCase()
 }
 
+// The share of one point an answer earns. Multi-part questions (code_fill, text_fill, answer_bank,
+// yes_no_grid) earn per slot: 2 of 3 placeholders right is 2/3. Every other type, match pairs included,
+// stays all or nothing. "Correct" (practice stats, the Missed filter) still means the full point.
+export function answerCredit(q: Question, given?: string): number {
+  if (!given) return 0
+  if (isSlotQuestion(q)) {
+    const { hits, total } = slotScore(q, given)
+    return total ? hits / total : 0
+  }
+  return isCorrect(q, given) ? 1 : 0
+}
+
 export interface MockResult {
   question: FlatQuestion
   number: number // 1-based position in the mock, as it was shown
   given?: string
   correct: boolean
+  credit: number // 0 to 1; below 1 while `correct` is false only for a partly right multi-part answer
   flagged: boolean
 }
 
@@ -149,15 +195,17 @@ export function gradeMock(run: MockExamRun): MockResult[] {
       number: i + 1,
       given,
       correct: !!given && isCorrect(question, given),
+      credit: answerCredit(question, given),
       flagged: !!run.flagged?.[question.id],
     }
   })
 }
 
-// Out of 1000, as the exam reports it; unanswered questions count as wrong.
+// Out of 1000, as the exam reports it: each question is worth one point, multi-part questions earn part
+// of it per slot, and unanswered questions earn nothing.
 export function mockScore(results: MockResult[]): number {
   if (!results.length) return 0
-  return Math.round((results.filter((r) => r.correct).length / results.length) * 1000)
+  return Math.round((results.reduce((sum, r) => sum + r.credit, 0) / results.length) * 1000)
 }
 
 export function questionLetterOptions(q: Question): string[] {

@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import type { AppState, MockExamRun } from '../types'
-import { buildMockSet, gradeMock, META, mockScore, QUESTION_BY_ID } from '../lib/exam'
+import { buildMockSet, CASE_QUESTIONS, gradeMock, META, mockScore, QUESTION_BY_ID } from '../lib/exam'
 import MockResults from './MockResults'
 import QuestionCard from './QuestionCard'
 
@@ -10,7 +10,9 @@ interface MockExamPageProps {
   setState: Dispatch<SetStateAction<AppState>>
 }
 
-const QUESTIONS_PER_MOCK = 50
+// Like the exam: the main questions, then one case study whose questions share a scenario.
+const MAIN_QUESTIONS_PER_MOCK = 42
+const QUESTIONS_PER_MOCK = MAIN_QUESTIONS_PER_MOCK + CASE_QUESTIONS.length
 
 export default function MockExamPage({ state, setState }: MockExamPageProps) {
   const active = state.activeMock
@@ -31,7 +33,7 @@ export default function MockExamPage({ state, setState }: MockExamPageProps) {
   }, [active])
 
   const startMock = () => {
-    const set = buildMockSet(QUESTIONS_PER_MOCK)
+    const set = buildMockSet(MAIN_QUESTIONS_PER_MOCK)
     const run: MockExamRun = {
       startedAt: Date.now(),
       questionIds: set.map((q) => q.id),
@@ -74,10 +76,11 @@ export default function MockExamPage({ state, setState }: MockExamPageProps) {
     if (!active) return
     const results = gradeMock(active)
     const byDomain: Record<number, { correct: number; total: number }> = {}
-    for (const { question: q, correct: c } of results) {
+    // `correct` counts points: a partly right multi-part answer adds part of one.
+    for (const { question: q, credit } of results) {
       byDomain[q.domainId] = byDomain[q.domainId] ?? { correct: 0, total: 0 }
       byDomain[q.domainId].total += 1
-      if (c) byDomain[q.domainId].correct += 1
+      byDomain[q.domainId].correct += credit
     }
     const score = mockScore(results)
     const finished: MockExamRun = {
@@ -105,7 +108,8 @@ export default function MockExamPage({ state, setState }: MockExamPageProps) {
             {QUESTIONS_PER_MOCK} questions · 120 min · 700 / 1000 to pass
           </h1>
           <p className="text-ink-dim mt-1 max-w-2xl">
-            Per-domain weights identical to the real exam. Timed. No explanations until you submit.
+            {MAIN_QUESTIONS_PER_MOCK} main questions weighted like the real exam, then a case study: one scenario
+            with {CASE_QUESTIONS.length} questions about it. Timed. No explanations until you submit.
             When you finish you get the total score, a per-domain breakdown so you know where to
             drill next, and a review of every answer with its explanation.
           </p>
@@ -155,7 +159,8 @@ export default function MockExamPage({ state, setState }: MockExamPageProps) {
         <div>
           <div className="text-xs text-ink-mute font-mono">MOCK IN PROGRESS</div>
           <div className="text-sm text-ink">
-            Question {idx + 1} / {questions.length} · Answered:{' '}
+            Question {idx + 1} / {questions.length}
+            {current?.casePart && ` · Case study, question ${current.casePart.index + 1} of ${current.casePart.total}`} · Answered:{' '}
             <span className="text-good">{answered}</span>
           </div>
         </div>
@@ -189,29 +194,37 @@ export default function MockExamPage({ state, setState }: MockExamPageProps) {
         {questions.map((q, i) => {
           const isAnswered = !!active.answers[q.id]
           const isFlagged = !!active.flagged?.[q.id]
+          const part = q.casePart ? `, case study question ${q.casePart.index + 1} of ${q.casePart.total}` : ''
           return (
-            <button
-              key={q.id}
-              onClick={() => setIdx(i)}
-              aria-label={`Question ${i + 1}${isAnswered ? ', answered' : ''}${isFlagged ? ', flagged' : ''}`}
-              className={`relative w-8 h-8 rounded-md text-xs font-mono ${
-                i === idx
-                  ? 'bg-accent text-bg'
-                  : isAnswered
-                  ? 'bg-good/30 text-good border border-good/40'
-                  : 'bg-bg-2 text-ink-dim border border-line'
-              }`}
-            >
-              {i + 1}
-              {isFlagged && (
-                <span
-                  aria-hidden
-                  className="absolute -top-1.5 -right-1.5 grid place-items-center w-4 h-4 rounded-full bg-accent-2 text-[9px] text-white"
-                >
-                  ⚑
-                </span>
+            <Fragment key={q.id}>
+              {/* The case study is its own section, after the main questions. */}
+              {q.casePart?.index === 0 && (
+                <div className="basis-full sm:basis-auto sm:ml-2">
+                  <span className="chip chip-purple">Case study</span>
+                </div>
               )}
-            </button>
+              <button
+                onClick={() => setIdx(i)}
+                aria-label={`Question ${i + 1}${part}${isAnswered ? ', answered' : ''}${isFlagged ? ', flagged' : ''}`}
+                className={`relative w-8 h-8 rounded-md text-xs font-mono ${
+                  i === idx
+                    ? 'bg-accent text-bg'
+                    : isAnswered
+                    ? 'bg-good/30 text-good border border-good/40'
+                    : 'bg-bg-2 text-ink-dim border border-line'
+                }`}
+              >
+                {i + 1}
+                {isFlagged && (
+                  <span
+                    aria-hidden
+                    className="absolute -top-1.5 -right-1.5 grid place-items-center w-4 h-4 rounded-full bg-accent-2 text-[9px] text-white"
+                  >
+                    ⚑
+                  </span>
+                )}
+              </button>
+            </Fragment>
           )
         })}
       </div>

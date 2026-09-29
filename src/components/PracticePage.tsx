@@ -30,7 +30,8 @@ function buildPool({ domain, mode, shuffled }: Filters, state: AppState): FlatQu
   } else if (mode === 'flagged') {
     p = p.filter((q) => state.flagged[q.id])
   }
-  return shuffled ? shuffle(p) : p
+  // The case study closes the pool, in order, as it closes the exam; only the main questions shuffle.
+  return shuffled ? [...shuffle(p.filter((q) => !q.caseStudy)), ...p.filter((q) => q.caseStudy)] : p
 }
 
 export default function PracticePage({ state, setState }: PracticePageProps) {

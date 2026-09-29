@@ -1,11 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import type { FlatQuestion, MatchPair, MockExamRun } from '../types'
 import { DOMAINS, gradeMock, matchSelections, META, mockScore } from '../lib/exam'
 import type { MockResult } from '../lib/exam'
 import { plainText } from '../lib/richText'
+import { isSlotQuestion } from '../lib/slots'
+import CaseStudyPanel from './CaseStudyPanel'
 import RichText from './RichText'
+import SlotFill from './SlotFill'
+import SlotReview from './SlotReview'
 
 type Show = 'missed' | 'flagged' | 'all'
 
@@ -13,7 +17,7 @@ interface DomainResult {
   id: number
   title: string
   results: MockResult[]
-  correct: number
+  correct: number // points earned: partly right multi-part answers add part of a point
   pct: number
 }
 
@@ -27,6 +31,10 @@ const TYPE_LABEL: Record<string, string> = {
   drag_drop_order: 'Order the steps',
   fill_blank: 'Fill in the blank',
   match_pairs: 'Match pairs',
+  code_fill: 'Complete the code',
+  text_fill: 'Complete the statement',
+  answer_bank: 'Answer bank',
+  yes_no_grid: 'Statement grid',
 }
 
 const SEP = ' -> '
@@ -40,6 +48,10 @@ const BAR = { good: 'bg-good', warn: 'bg-warn', bad: 'bg-bad' }
 const TEXT = { good: 'text-good', warn: 'text-warn', bad: 'text-bad' }
 const reviewId = (questionId: string) => `review-${questionId}`
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+// Points to two decimals, and whole numbers as they are (3, 1.75, 1.67), close enough that the
+// percentage beside them always reads as their share.
+const points = (n: number) => String(Math.round(n * 100) / 100)
+const earned = (results: MockResult[]) => results.reduce((sum, r) => sum + r.credit, 0)
 
 // Score, per-domain breakdown and an answer-by-answer review of a submitted mock. Renders nothing for
 // a mock still in progress: answers are only revealed once it is submitted.
@@ -49,7 +61,7 @@ export default function MockResults({ run, focusOnMount }: { run: MockExamRun; f
   const domains: DomainResult[] = DOMAINS.flatMap((d) => {
     const inDomain = results.filter((r) => r.question.domainId === d.domain_id)
     if (!inDomain.length) return []
-    const correct = inDomain.filter((r) => r.correct).length
+    const correct = earned(inDomain)
     return [{ id: d.domain_id, title: d.title, results: inDomain, correct, pct: Math.round((correct / inDomain.length) * 100) }]
   })
 
@@ -70,6 +82,7 @@ export default function MockResults({ run, focusOnMount }: { run: MockExamRun; f
 
   const correctCount = results.length - missed.length
   const unanswered = missed.filter((r) => !r.given).length
+  const partial = missed.filter((r) => r.credit > 0).length
   const flaggedCount = results.filter((r) => r.flagged).length
   // Scored like every count on this page, from today's grading: a run saved by an older version
   // (self-graded match pairs, case-study parents) still adds up, even if its stored score differs.
@@ -120,6 +133,7 @@ export default function MockResults({ run, focusOnMount }: { run: MockExamRun; f
             </h2>
             <p className="text-sm text-ink-dim mt-1">
               {correctCount} of {results.length} correct · {missed.length} missed
+              {partial > 0 && ` (${partial} with partial credit)`}
               {unanswered > 0 && ` (${unanswered} not answered)`}
               {flaggedCount > 0 && ` · ${flaggedCount} flagged`} · pass mark {META.passing_score}
             </p>
@@ -154,12 +168,12 @@ export default function MockResults({ run, focusOnMount }: { run: MockExamRun; f
                   <li key={d.id}>
                     <button
                       onClick={() => openReview('missed', d.id)}
-                      aria-label={`Review ${plural(d.results.length - d.correct, 'missed question')} in ${domainName(d)}, ${d.pct}% correct`}
+                      aria-label={`Review ${plural(d.results.filter((r) => !r.correct).length, 'missed question')} in ${domainName(d)}, ${d.pct}% correct`}
                       className="w-full text-left flex flex-wrap sm:flex-nowrap items-baseline justify-between gap-x-3 gap-y-0.5 rounded-lg border border-line px-3 py-2 text-sm transition hover:border-line-strong hover:bg-bg-3 cursor-pointer"
                     >
                       <span className="text-ink-dim">{domainName(d)}</span>
                       <span className={`shrink-0 font-mono ${TEXT[tone(d.pct)]}`}>
-                        {d.pct}% · review {d.results.length - d.correct} ▸
+                        {d.pct}% · review {d.results.filter((r) => !r.correct).length} ▸
                       </span>
                     </button>
                   </li>
@@ -231,10 +245,18 @@ export default function MockResults({ run, focusOnMount }: { run: MockExamRun; f
           {shown.length ? `Showing ${shown.length} of ${results.length} questions.` : emptyMessage[show]}
         </p>
         <ul className="space-y-3">
-          {shown.map((r) => (
-            <li key={r.question.id}>
-              <ReviewItem result={r} />
-            </li>
+          {shown.map((r, i) => (
+            <Fragment key={r.question.id}>
+              {/* The case study's scenario once, ahead of the first of its questions on show. */}
+              {r.question.caseStudy && !shown[i - 1]?.question.caseStudy && (
+                <li aria-label="Case study scenario">
+                  <CaseStudyPanel caseStudy={r.question.caseStudy} />
+                </li>
+              )}
+              <li>
+                <ReviewItem result={r} />
+              </li>
+            </Fragment>
           ))}
         </ul>
       </section>
@@ -255,7 +277,7 @@ function DomainCard({
   for (const r of d.results) {
     const o = objectives.get(r.question.objectiveId) ?? { title: r.question.objectiveTitle, correct: 0, total: 0 }
     o.total += 1
-    if (r.correct) o.correct += 1
+    o.correct += r.credit
     objectives.set(r.question.objectiveId, o)
   }
   const byId = [...objectives].sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
@@ -274,7 +296,7 @@ function DomainCard({
           <span className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
             <span className="text-sm font-medium text-ink">{domainName(d)}</span>{' '}
             <span className="text-sm font-mono text-ink-dim">
-              {d.correct} of {d.results.length} correct · {d.pct}%
+              {points(d.correct)} of {d.results.length} correct · {d.pct}%
             </span>
           </span>{' '}
           <span aria-hidden className="block h-1.5 bg-bg-3 rounded-full mt-2 overflow-hidden">
@@ -296,7 +318,7 @@ function DomainCard({
                   <span className="font-mono text-ink-mute">{id}</span> {o.title}
                 </span>
                 <span className={`shrink-0 font-mono ${TEXT[tone(Math.round((o.correct / o.total) * 100))]}`}>
-                  {o.correct} of {o.total}
+                  {points(o.correct)} of {o.total}
                 </span>
               </li>
             ))}
@@ -353,12 +375,14 @@ function QuestionLinks({
   )
 }
 
-const verdictText = (r: MockResult) => (r.correct ? 'Correct' : r.given ? 'Incorrect' : 'Not answered')
+const verdictText = (r: MockResult) =>
+  r.correct ? 'Correct' : r.credit > 0 ? 'Partly correct' : r.given ? 'Incorrect' : 'Not answered'
 
 function Verdict({ result }: { result: MockResult }) {
+  const partly = !result.correct && result.credit > 0
   return (
-    <span className={`chip shrink-0 ${result.correct ? 'chip-good' : 'chip-bad'}`}>
-      {result.correct ? '✓' : '✕'} {verdictText(result)}
+    <span className={`chip shrink-0 ${result.correct ? 'chip-good' : partly ? 'chip-warn' : 'chip-bad'}`}>
+      {result.correct ? '✓' : partly ? '◐' : '✕'} {verdictText(result)}
     </span>
   )
 }
@@ -377,6 +401,11 @@ function ReviewItem({ result }: { result: MockResult }) {
         <Verdict result={result} />
         {result.flagged && <span className="chip chip-purple">⚑ Flagged</span>}
         <span className="chip">{TYPE_LABEL[q.type] ?? q.type}</span>
+        {q.casePart && (
+          <span className="chip chip-purple">
+            Case study · {q.casePart.index + 1} of {q.casePart.total}
+          </span>
+        )}
       </header>
       <p className="mt-3 text-xs text-ink-mute leading-relaxed">
         <span className="block">{domainName({ id: q.domainId, title: q.domainTitle })}</span>
@@ -404,6 +433,15 @@ function ReviewItem({ result }: { result: MockResult }) {
 
 function AnswerComparison({ result: { question: q, given, correct } }: { result: MockResult }) {
   if (q.type === 'match_pairs' && q.pairs) return <PairsComparison pairs={q.pairs} given={given} />
+
+  if (isSlotQuestion(q)) {
+    return (
+      <div className="space-y-4">
+        {(q.type === 'code_fill' || q.type === 'text_fill') && <SlotFill question={q} value={given ?? ''} graded />}
+        <SlotReview question={q} given={given} titleAs="h3" />
+      </div>
+    )
+  }
 
   if (q.type === 'drag_drop_order') {
     const key = (q.correct ?? '').split(SEP).map((s) => s.trim())

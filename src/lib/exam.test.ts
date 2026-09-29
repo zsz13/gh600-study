@@ -1,6 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import type { Domain } from '../types'
-import { ALL_QUESTIONS, DOMAINS, flattenQuestions, gradeMock, isCorrect, matchSelections, mockScore } from './exam'
+import type { Domain, FlatQuestion } from '../types'
+import {
+  ALL_QUESTIONS,
+  answerCredit,
+  buildMockSet,
+  DOMAINS,
+  flattenQuestions,
+  gradeMock,
+  isCorrect,
+  matchSelections,
+  mockScore,
+  CASE_QUESTIONS,
+  MAIN_QUESTIONS,
+  QUESTIONS_BY_DOMAIN,
+} from './exam'
+import { PLACEHOLDER, slotChoices, slotKey } from './slots'
 
 const SEP = ' -> '
 
@@ -42,9 +56,92 @@ describe('question bank', () => {
         expect(isCorrect(q, [...key.slice(1), key[0]].join(','))).toBe(false)
         break
       }
+      case 'code_fill':
+      case 'text_fill':
+      case 'answer_bank':
+      case 'yes_no_grid': {
+        const slots = q.slots ?? []
+        const [min, max] = { code_fill: [1, 3], text_fill: [2, 3], answer_bank: [3, 4], yes_no_grid: [3, 5] }[q.type]
+        expect(slots.length).toBeGreaterThanOrEqual(min)
+        expect(slots.length).toBeLessThanOrEqual(max)
+        const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ')
+        slots.forEach((slot, i) => {
+          const choices = slotChoices(q, i)
+          expect(choices.length).toBeGreaterThanOrEqual(2)
+          expect(new Set(choices.map(norm)).size).toBe(choices.length) // one defensible spelling each
+          // Answers are stored as indices joined by commas, so the answer must be exactly one choice.
+          expect(choices.filter((c) => c === slot.answer)).toHaveLength(1)
+          expect(slot.explanation.trim()).toBeTruthy()
+        })
+        if (q.type === 'code_fill' || q.type === 'text_fill') {
+          // Every placeholder appears exactly once, numbered 1..n in order, and each has its own choices.
+          const markers = q.template!.split(PLACEHOLDER).filter((_, i) => i % 2).map(Number)
+          expect(markers).toEqual(slots.map((_, i) => i + 1))
+          for (const slot of slots) expect(slot.options?.length).toBeGreaterThanOrEqual(2)
+        } else {
+          for (const slot of slots) expect(slot.prompt?.trim()).toBeTruthy()
+          expect(new Set(slots.map((s) => norm(s.prompt!))).size).toBe(slots.length)
+        }
+        if (q.type === 'answer_bank') {
+          // A shared bank of 6-8 answers, each used by at most one requirement, with distractors left over.
+          expect(q.bank!.length).toBeGreaterThanOrEqual(6)
+          expect(q.bank!.length).toBeLessThanOrEqual(8)
+          expect(new Set(slots.map((s) => s.answer)).size).toBe(slots.length)
+        }
+        if (q.type === 'yes_no_grid') expect(new Set(q.labels ?? ['Yes', 'No']).size).toBe(2)
+        const key = slotKey(q)
+        expect(isCorrect(q, key.join(','))).toBe(true)
+        expect(answerCredit(q, key.join(','))).toBe(1)
+        // One slot changed to another choice: not correct, and credit for the rest.
+        const alt = slotChoices(q, 0).findIndex((_, k) => k !== key[0] && !(q.type === 'answer_bank' && key.includes(k)))
+        const oneWrong = [alt, ...key.slice(1)].join(',')
+        expect(isCorrect(q, oneWrong)).toBe(false)
+        expect(answerCredit(q, oneWrong)).toBeCloseTo((key.length - 1) / key.length)
+        break
+      }
       default:
         // case_study parents carry no controls; their context is folded into each sub-question.
         throw new Error(`unanswerable question type in the bank: ${q.type}`)
+    }
+  })
+
+  // A snippet with an unescaped ${{ }} would not compile, but one that interpolated a value would.
+  it.each(ALL_QUESTIONS.filter((q) => q.template).map((q) => [q.id, q] as const))('%s has a clean template', (_id, q) => {
+    expect(q.template).not.toMatch(/undefined|\[object /)
+  })
+})
+
+describe('case study', () => {
+  const children = ALL_QUESTIONS.filter((q) => q.caseStudy)
+  const scenario = children[0].caseStudy!
+  const said = (q: FlatQuestion) => [q.stem, q.template, ...(q.options ?? []), ...(q.slots ?? []).map((s) => s.prompt)].join(' ')
+
+  it('is one shared scenario with exactly eight questions, closing the bank in order', () => {
+    expect(children).toHaveLength(8)
+    for (const q of children) expect(q.caseStudy).toBe(scenario) // one object, so it is described once
+    expect(ALL_QUESTIONS.slice(-8)).toEqual(children)
+    expect(children.map((q) => q.casePart)).toEqual(children.map((_, index) => ({ index, total: 8 })))
+    expect(CASE_QUESTIONS).toEqual(children)
+    expect(MAIN_QUESTIONS).toHaveLength(ALL_QUESTIONS.length - 8)
+  })
+
+  it('describes structure, agents, dependencies, workflows, permissions, branches, controls, state, failures and requirements', () => {
+    const headings = scenario.sections.map((s) => s.heading.toLowerCase()).join(' | ')
+    for (const topic of ['repository', 'agent', 'depend', 'workflow', 'permission', 'branch', 'control', 'artifact', 'fail', 'requirement'])
+      expect(headings).toContain(topic)
+  })
+
+  it('asks in mixed formats', () => {
+    const types = new Set(children.map((q) => q.type))
+    for (const type of ['multiple_choice', 'multi_select', 'yes_no_grid', 'code_fill', 'answer_bank']) expect(types).toContain(type)
+  })
+
+  it('asks every question about the shared scenario, without repeating it in the stem', () => {
+    // Each question names a job, agent, team or incident that exists only in the scenario.
+    const names = /security-scan|test-analysis|summarize|handoff|deploy\.yml|pr-agents|@northwind|incident \d/i
+    for (const q of children) {
+      expect(said(q), q.id).toMatch(names)
+      expect(q.stem).not.toContain(scenario.summary)
     }
   })
 })
@@ -125,6 +222,35 @@ describe('match pairs', () => {
     expect(matchSelections(' 1,0', 2)).toEqual([undefined, 0])
     expect(matchSelections('1.0,01', 2)).toEqual([undefined, undefined])
     expect(matchSelections('0,1,2,3,4', 4)).toEqual([undefined, undefined, undefined, undefined])
+  })
+})
+
+describe('buildMockSet', () => {
+  it('can draw every question in the bank, the multi-part types included, from its own domain pool', () => {
+    for (const q of ALL_QUESTIONS) expect(QUESTIONS_BY_DOMAIN[q.domainId]).toContain(q)
+    const pooled = new Set(Object.values(QUESTIONS_BY_DOMAIN).flat().map((q) => q.type))
+    for (const type of ['code_fill', 'text_fill', 'answer_bank', 'yes_no_grid']) expect(pooled).toContain(type)
+  })
+
+  it('draws 42 distinct main questions from every domain, then the whole case study in order', () => {
+    const set = buildMockSet(42)
+    expect(set).toHaveLength(50)
+    expect(new Set(set.map((q) => q.id)).size).toBe(50)
+    const [main, cases] = [set.slice(0, 42), set.slice(42)]
+    expect(main.every((q) => !q.caseStudy)).toBe(true)
+    expect(cases).toEqual(CASE_QUESTIONS)
+    expect(new Set(main.map((q) => q.domainId))).toEqual(new Set(DOMAINS.map((d) => d.domain_id)))
+  })
+
+  it('weights the main questions by domain, the shares adding up to exactly the count asked for', () => {
+    const perDomain = (n: number) => {
+      const counts: Record<number, number> = {}
+      for (const q of buildMockSet(n).filter((x) => !x.caseStudy)) counts[q.domainId] = (counts[q.domainId] ?? 0) + 1
+      return counts
+    }
+    // 42 × (17.5, 22.5, 12.5, 17.5, 17.5, 12.5)% = 7.35, 9.45, 5.25, 7.35, 7.35, 5.25: floors of 40,
+    // plus one each to the two largest remainders.
+    expect(perDomain(42)).toEqual({ 1: 8, 2: 10, 3: 5, 4: 7, 5: 7, 6: 5 })
   })
 })
 

@@ -15,8 +15,9 @@ function Harness() {
 }
 
 const card = () => screen.getByRole('article')
-// The verdict chip ("✓ Correct", "✕ Incorrect · 1 of 3 pairs"), not a per-step "✓ Correct position" mark.
-const VERDICT = /^(✓ Correct|✕ Incorrect)( ·|$)/
+// The verdict chip ("✓ Correct", "✕ Incorrect · 1 of 3 pairs", "◐ Partly correct · 2 of 3 placeholders"),
+// not a per-step "✓ Correct position" mark.
+const VERDICT = /^(✓ Correct|✕ Incorrect|◐ Partly correct)( ·|$)/
 const stem = () => within(card()).getByRole('heading').textContent
 
 // Answers whatever question type is on screen, the way a user would.
@@ -25,14 +26,51 @@ async function answerCurrent(user: UserEvent) {
   // Match pairs: each answer goes to the current item, and the target moves to the next unmatched one.
   const answers = c.queryByRole('group', { name: /^Answers/ })
   if (answers) for (const a of within(answers).getAllByRole('button')) await user.click(a)
+  // Answer bank: tap an answer, then an empty requirement, until every requirement is filled.
+  const bank = c.queryByRole('group', { name: 'Answer bank' })
+  if (bank) {
+    const chips = within(bank).getAllByRole('button')
+    for (const [i, requirement] of c.getAllByRole('button', { name: /^Requirement \d+, empty$/ }).entries()) {
+      await user.click(chips[i])
+      await user.click(requirement)
+    }
+  }
+  // Placeholders in code or a statement: a choice in each dropdown. Statement grids: one per statement.
+  for (const select of c.queryAllByRole('combobox', { name: /^Placeholder \d+$/ })) await user.selectOptions(select, '0')
+  for (const statement of c.queryAllByRole('radiogroup')) await user.click(within(statement).getAllByRole('radio')[0])
   const input = c.queryByRole('textbox')
   if (input) await user.type(input, 'x')
-  const options = c.queryAllByRole('button', { pressed: false }).filter((b) => b.closest('ul'))
+  const options = bank ? [] : c.queryAllByRole('button', { pressed: false }).filter((b) => b.closest('ul'))
   if (options.length) await user.click(options[0])
   await user.click(c.getByRole('button', { name: 'Check answer' }))
 }
 
+function SeededHarness({ seed }: { seed: AppState }) {
+  const [state, setState] = useState<AppState>(seed)
+  return <PracticePage state={state} setState={setState} />
+}
+
 describe('practice session', () => {
+  it('drills a partly right multi-part answer again in Missed mode, and not a fully right one', async () => {
+    const user = userEvent.setup()
+    const attempt = (id: string, given: string, correct: boolean) => [id, [{ id, given, correct, ts: 1 }]]
+    render(
+      <SeededHarness
+        seed={{
+          ...EMPTY,
+          questionAttempts: Object.fromEntries([
+            attempt('ap-wf-1', '1,2,1', false), // 2 of 3 placeholders
+            attempt('ap-grid-3', '0,1,0,1', true),
+          ]),
+        }}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: 'Missed' }))
+    expect(screen.getByText(/Current pool:/).textContent).toContain('Current pool: 1')
+    expect(stem()).toContain('Two analyzer jobs each write a JSON report.')
+  })
+
+
   it.each(['Shuffle', 'Unseen'])('keeps the answered question on screen in %s mode', async (mode) => {
     const user = userEvent.setup()
     render(<Harness />)
@@ -44,6 +82,19 @@ describe('practice session', () => {
     expect(stem()).toBe(before)
     expect(within(card()).getByText(VERDICT)).toBeTruthy()
   })
+
+  it('keeps the case study last and in order when the main questions are shuffled', async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    await user.click(screen.getByRole('button', { name: 'Shuffle' }))
+    const total = Number(screen.getByText(/\d+ \/ \d+/).textContent!.split('/')[1])
+    // Walk forward to the last eight positions: the case study, in order.
+    for (let i = 0; i < total - 8; i++) await user.click(within(card()).getByRole('button', { name: 'Next ▸' }))
+    for (let part = 1; part <= 8; part++) {
+      expect(within(card()).getByText(new RegExp(`Question ${part} of 8`))).toBeTruthy()
+      if (part < 8) await user.click(within(card()).getByRole('button', { name: 'Next ▸' }))
+    }
+  }, 60_000)
 
   it('keeps the question on screen when it is flagged in Shuffle mode', async () => {
     const user = userEvent.setup()
@@ -93,5 +144,5 @@ describe('practice session', () => {
       expect(within(card()).getByText(VERDICT)).toBeTruthy()
       if (i < total - 1) await user.click(within(card()).getByRole('button', { name: 'Next ▸' }))
     }
-  }, 60_000)
+  }, 120_000)
 })

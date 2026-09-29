@@ -5,12 +5,36 @@ export type QuestionType =
   | 'fill_blank'
   | 'match_pairs'
   | 'case_study'
+  // Multi-part questions, graded slot by slot (see lib/slots.ts):
+  | 'code_fill' // a code snippet whose [[n]] placeholders are each chosen from a dropdown
+  | 'text_fill' // a statement whose [[n]] placeholders are each chosen from a dropdown
+  | 'answer_bank' // requirements, each filled from one shared bank of answers used at most once
+  | 'yes_no_grid' // statements answered one by one, Yes or No (or the question's own two labels)
 
 export type Difficulty = 'easy' | 'medium' | 'hard'
 
 export interface MatchPair {
   left: string
   right: string
+}
+
+// One independently graded part of a multi-part question.
+export interface Slot {
+  // answer_bank: the requirement; yes_no_grid: the statement. Fills mark their place in `template` instead.
+  prompt?: string
+  // code_fill / text_fill: this placeholder's own choices. answer_bank uses `bank`, yes_no_grid `labels`.
+  options?: string[]
+  // The correct choice, spelled exactly as it appears among the slot's choices.
+  answer: string
+  explanation: string
+}
+
+// The shared scenario of a case study, shown with each of its questions.
+export interface CaseStudy {
+  id: string
+  title: string
+  summary: string
+  sections: { heading: string; items: string[] }[]
 }
 
 export interface Question {
@@ -23,6 +47,10 @@ export interface Question {
   domain: string
   difficulty?: Difficulty
   sub_questions?: Question[]
+  template?: string
+  slots?: Slot[]
+  bank?: string[]
+  labels?: [string, string]
 }
 
 export interface Objective {
@@ -70,6 +98,9 @@ export interface FlatQuestion extends Question {
   domainTitle: string
   objectiveId: string
   objectiveTitle: string
+  // A question that belongs to a case study carries the scenario and its place in the set.
+  caseStudy?: CaseStudy
+  casePart?: { index: number; total: number }
 }
 
 export interface AttemptAnswer {

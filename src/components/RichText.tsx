@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import type { ReactNode } from 'react'
 import { splitFences, splitInline } from '../lib/richText'
 
 // Bank text with its markup rendered: a fenced snippet as a code block that keeps its lines and
@@ -9,7 +10,7 @@ import { splitFences, splitInline } from '../lib/richText'
 export default function RichText({ text }: { text: string }) {
   return splitFences(text).map((part, i) =>
     i % 2 ? (
-      <CodeBlock key={i} code={part} />
+      <CodeBlock key={i}>{part}</CodeBlock>
     ) : (
       splitInline(part).map((bit, j) =>
         j % 2 ? (
@@ -27,7 +28,9 @@ export default function RichText({ text }: { text: string }) {
   )
 }
 
-function CodeBlock({ code }: { code: string }) {
+// A snippet's lines and indentation, kept as written. Its children are usually the code text; a
+// code_fill question also places its placeholder dropdowns inline among them.
+export function CodeBlock({ children }: { children: ReactNode }) {
   const ref = useRef<HTMLElement>(null)
   // A snippet wider than its box scrolls inside it; only then is it a tab stop, so the keyboard can scroll it.
   useEffect(() => {
@@ -45,7 +48,7 @@ function CodeBlock({ code }: { code: string }) {
       ref={ref}
       className="block my-2 font-mono font-normal text-[13px] leading-relaxed text-ink whitespace-pre overflow-x-auto scroll-thin bg-bg-3 border border-line rounded-lg p-3"
     >
-      {code}
+      {children}
     </code>
   )
 }

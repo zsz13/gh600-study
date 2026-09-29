@@ -294,3 +294,76 @@ describe('mock results summary', () => {
     expect(item(1).getAllByText('Not matched')).toHaveLength(match.pairs!.length)
   })
 })
+
+describe('mock results: multi-part questions', () => {
+  const code = byId('ap-wf-1') // key 1,2,0
+  const grid = byId('ap-grid-3') // key 0,1,0,1
+  const bank = byId('case-4') // an answer bank in the case study (domain 6)
+  const RUN_SLOTS: MockExamRun = {
+    startedAt: 0,
+    finishedAt: 1,
+    questionIds: [code.id, grid.id, bank.id],
+    answers: { [code.id]: '1,2,0', [grid.id]: '0,1,0,0' }, // the bank question is left unanswered
+  }
+
+  it('scores per slot: a partly right answer earns part of its point', () => {
+    render(<MockResults run={RUN_SLOTS} />)
+    // (1 + 3/4 + 0) / 3
+    expect(screen.getByRole('heading', { name: 'Score: 583 / 1000' })).toBeTruthy()
+    expect(screen.getByText(/^1 of 3 correct · 2 missed \(1 with partial credit\) \(1 not answered\) ·/)).toBeTruthy()
+    const d5 = within(screen.getByRole('region', { name: 'Results by domain' })).getByText(/^Domain 5 · /).closest('details')!
+    expect(within(d5).getByText('1.75 of 2 correct · 88%')).toBeTruthy()
+  })
+
+  it('reviews a partly right statement grid statement by statement, with each explanation', () => {
+    render(<MockResults run={RUN_SLOTS} />)
+    const q2 = item(2)
+    expect(q2.getByText('◐ Partly correct')).toBeTruthy()
+    expect(q2.getByRole('heading', { name: 'Your answers · 3 of 4 correct' })).toBeTruthy()
+    const last = q2.getAllByRole('listitem').at(-1)!
+    expect(last.textContent).toContain('Your answer: Yes')
+    expect(last.textContent).toContain('Correct answer: No')
+    expect(last.textContent).toContain(grid.slots![3].explanation)
+    expect(q2.getAllByText(/^Correct answer:/)).toHaveLength(1)
+  })
+
+  it('reviews code placeholders in the snippet as answered, and lists each one', async () => {
+    const user = userEvent.setup()
+    render(<MockResults run={RUN_SLOTS} />)
+    await user.click(within(review()).getByRole('button', { name: 'All (3)' }))
+    const q1 = item(1)
+    expect(q1.getByText('✓ Correct')).toBeTruthy()
+    const snippet = q1.getByText(/^jobs:/, { selector: 'code' })
+    expect(snippet.textContent).toContain('- uses: 1 actions/upload-artifact@v4 ✓ (correct)')
+    expect(q1.queryAllByRole('combobox')).toEqual([]) // read-only
+    expect(q1.getByRole('heading', { name: 'Your answers · 3 of 3 correct' })).toBeTruthy()
+  })
+
+  it('shows an unanswered answer-bank question with every correct answer', () => {
+    render(<MockResults run={RUN_SLOTS} />)
+    const q3 = item(3)
+    expect(q3.getByText('✕ Not answered')).toBeTruthy()
+    expect(q3.getByText('Case study · 4 of 8')).toBeTruthy()
+    expect(q3.getAllByText('Not answered', { selector: 'span' })).toHaveLength(bank.slots!.length)
+    const rows = q3.getAllByRole('listitem')
+    for (const slot of bank.slots!) expect(rows.some((li) => li.textContent!.includes(`Correct answer: ${plainText(slot.answer)}`))).toBe(true)
+  })
+
+  it('shows the shared case once, open, ahead of the case questions, and none of it inside them', async () => {
+    const user = userEvent.setup()
+    const [first, second] = [byId('case-1'), byId('case-2')]
+    render(<MockResults run={{ startedAt: 0, finishedAt: 1, questionIds: [code.id, first.id, second.id], answers: { [code.id]: '1,2,0' } }} />)
+    await user.click(within(review()).getByRole('button', { name: 'All (3)' }))
+    const scenarios = within(review()).getAllByRole('listitem', { name: 'Case study scenario' })
+    expect(scenarios).toHaveLength(1)
+    const panel = within(scenarios[0]).getByText(first.caseStudy!.title).closest('details')!
+    expect(panel.open).toBe(true)
+    expect(within(panel).getByText('Current failures and risks')).toBeTruthy()
+    // After the main question, before the first case question.
+    const order = [item(1), item(2)].map((q) => q.getByText(/^Q\d+$/).closest('article')!)
+    expect(order[0].compareDocumentPosition(scenarios[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(scenarios[0].compareDocumentPosition(order[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    for (const n of [2, 3]) expect(item(n).queryByText(first.caseStudy!.title)).toBeNull()
+    expect(item(3).getByText('Case study · 2 of 8')).toBeTruthy()
+  })
+})
